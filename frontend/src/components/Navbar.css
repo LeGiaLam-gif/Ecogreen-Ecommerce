@@ -1,0 +1,144 @@
+.navbar-container {
+  background-color: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  padding: 12px 0;
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.navbar-content {
+  max-width: 1400px;
+  margin: 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 24px;
+}
+
+.navbar-logo {
+  text-decoration: none;
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: var(--text-color);
+  letter-spacing: -0.03em;
+  transition: opacity 0.2s;
+}
+
+.navbar-logo:hover {
+  opacity: 0.7;
+}
+
+.navbar-search-wrapper {
+  flex: 1;
+  max-width: 500px;
+  margin: 0 40px;
+  position: relative;
+}
+
+.navbar-search-input {
+  width: 100%;
+  padding: 10px 16px 10px 40px;
+  border-radius: 10px;
+  border: none;
+  background-color: #f5f5f7;
+  outline: none;
+  font-size: 0.95rem;
+  transition: var(--transition);
+  color: var(--text-color);
+}
+
+.navbar-search-input:focus {
+  background-color: #fff;
+  box-shadow: 0 0 0 4px rgba(0, 113, 227, 0.1);
+}
+
+.navbar-search-wrapper::before {
+  content: "🔍";
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.9rem;
+  opacity: 0.5;
+}
+
+.navbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.navbar-link {
+  text-decoration: none;
+  color: var(--text-color);
+  font-size: 0.95rem;
+  font-weight: 500;
+  transition: var(--transition);
+}
+
+.navbar-link:hover {
+  color: var(--primary-color);
+}
+
+.navbar-divider {
+  width: 1px;
+  height: 20px;
+  background-color: #d1d1d6;
+  margin: 0 10px;
+}
+
+/* Shopping Cart */
+.navbar-cart {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  transition: var(--transition);
+}
+
+.navbar-cart:hover {
+  background-color: #f5f5f7;
+}
+
+.cart-icon {
+  font-size: 1.4rem;
+}
+
+.cart-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  background-color: var(--primary-color);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #fff;
+}
+
+@media (max-width: 768px) {
+  .navbar-search-wrapper {
+    display: none; /* Ẩn search trên mobile để gọn nhẹ */
+  }
+  .navbar-logo {
+    font-size: 1.2rem;
+  }
+  .navbar-actions {
+    gap: 12px;
+  }
+  .navbar-link {
+    font-size: 0.85rem;
+  }
+}

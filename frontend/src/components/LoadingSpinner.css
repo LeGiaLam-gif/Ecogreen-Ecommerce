@@ -1,0 +1,31 @@
+.loading-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  min-height: 60vh;
+  padding: 40px 20px;
+}
+
+.loading-page-label {
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+}
+
+.loading-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.spinner-sm {
+  width: 18px;
+  height: 18px;
+  border-width: 2px;
+}
+
+.loading-inline-label {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}

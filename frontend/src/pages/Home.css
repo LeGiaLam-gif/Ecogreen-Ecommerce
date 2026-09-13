@@ -1,0 +1,121 @@
+.home-container {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 40px 20px;
+}
+
+.home-header {
+  text-align: center;
+  margin-bottom: 50px;
+}
+
+.home-title {
+  font-size: 3rem;
+  font-weight: 800;
+  color: var(--text-color);
+  margin-bottom: 12px;
+  letter-spacing: -0.02em;
+}
+
+.home-subtitle {
+  font-size: 1.25rem;
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+.results-info {
+  margin-bottom: 24px;
+}
+
+.results-info p {
+  color: var(--text-secondary);
+}
+
+.loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 100px 0;
+  color: var(--text-secondary);
+}
+
+.loading-state .spinner {
+  margin-bottom: 16px;
+}
+
+.product-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 30px;
+}
+
+.no-results {
+  text-align: center;
+  padding: 80px 0;
+  background-color: #fff;
+  border-radius: var(--border-radius);
+  border: 1px dashed #d1d1d6;
+}
+
+.no-results-icon {
+  font-size: 4rem;
+  margin-bottom: 20px;
+}
+
+.no-results h3 {
+  font-size: 1.5rem;
+  margin-bottom: 8px;
+  color: var(--text-color);
+}
+
+.no-results p {
+  color: var(--text-secondary);
+}
+
+.load-more-section {
+  display: flex;
+  justify-content: center;
+  margin-top: 60px;
+}
+
+.load-more-btn {
+  padding: 16px 48px;
+  font-size: 1rem;
+  font-weight: 600;
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  border: 1px solid #d1d1d6;
+  border-radius: 30px;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.load-more-btn:hover {
+  background-color: var(--text-color);
+  color: #fff;
+  border-color: var(--text-color);
+}
+
+@media (max-width: 1024px) {
+  .product-grid {
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 20px;
+  }
+}
+
+@media (max-width: 768px) {
+  .home-title {
+    font-size: 2.2rem;
+  }
+  .home-subtitle {
+    font-size: 1rem;
+  }
+  .product-grid {
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 16px;
+  }
+  .home-container {
+    padding: 24px 12px;
+  }
+}

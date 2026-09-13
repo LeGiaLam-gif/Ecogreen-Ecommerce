@@ -1,0 +1,10 @@
+/* Đã dọn dẹp các style mặc định để tránh xung đột với thiết kế mới */
+.app-container {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.main-content {
+  flex: 1;
+}

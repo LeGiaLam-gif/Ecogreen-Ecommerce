@@ -1,0 +1,148 @@
+.product-card {
+  background-color: var(--card-bg);
+  border-radius: var(--border-radius);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  transition: var(--transition);
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  height: 100%;
+}
+
+.product-card:hover {
+  transform: translateY(-8px);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.08);
+  border-color: rgba(0, 0, 0, 0.1);
+}
+
+.product-image-container {
+  width: 100%;
+  aspect-ratio: 1/1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+  background-color: #fbfbfd;
+  border-radius: 8px;
+  overflow: hidden;
+  position: relative;
+}
+
+.product-image {
+  max-width: 85%;
+  max-height: 85%;
+  object-fit: contain;
+  transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.product-card:hover .product-image {
+  transform: scale(1.1);
+}
+
+.product-info {
+  margin-bottom: 20px;
+  flex-grow: 1;
+}
+
+.product-name {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text-color);
+  margin-bottom: 8px;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.product-price {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--accent-color);
+}
+
+.product-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.btn-add-cart, .btn-detail {
+  flex: 1;
+  padding: 10px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  transition: var(--transition);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-add-cart {
+  background-color: var(--secondary-color);
+  color: var(--primary-color);
+}
+
+.btn-add-cart:hover {
+  background-color: #E4EFE0;
+  transform: scale(1.02);
+}
+
+.btn-detail {
+  background-color: var(--text-color);
+  color: #ffffff;
+}
+
+.btn-detail:hover {
+  background-color: var(--primary-hover);
+  transform: scale(1.02);
+}
+
+@media (max-width: 768px) {
+  .product-card {
+    padding: 12px;
+  }
+  .product-name {
+    font-size: 0.95rem;
+  }
+  .product-price {
+    font-size: 1rem;
+  }
+  .btn-add-cart, .btn-detail {
+    padding: 8px 4px;
+    font-size: 0.75rem;
+  }
+}
+
+/* --- EcoGreen additions --- */
+.product-badge-outofstock {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: var(--danger-color);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+.product-category {
+  display: inline-block;
+  font-size: 0.72rem;
+  color: var(--success-color);
+  background: #e8f5e9;
+  padding: 2px 8px;
+  border-radius: 10px;
+  margin-bottom: 4px;
+  width: fit-content;
+}
+.btn-add-cart:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

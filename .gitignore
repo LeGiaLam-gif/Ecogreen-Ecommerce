@@ -1,0 +1,19 @@
+# Environment / secrets
+.env
+.env.local
+*.env
+!.env.example
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Backend build output (backend/.gitignore also covers this)
+backend/target/
+backend/.mvn_out.log
+
+# Frontend
+frontend/node_modules/
+frontend/dist/

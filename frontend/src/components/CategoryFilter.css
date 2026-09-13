@@ -1,0 +1,36 @@
+.category-filter-container {
+  max-width: 1200px;
+  margin: 0 auto 32px;
+  padding: 0 10px;
+}
+
+.category-filter-list {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 5px;
+}
+
+.category-item {
+  padding: 8px 18px;
+  border-radius: 20px;
+  border: 1px solid #d7e5d8;
+  background-color: #fff;
+  color: #2e5233;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.category-item:hover {
+  border-color: var(--success-color);
+}
+
+.category-item.active {
+  background-color: var(--success-color);
+  border-color: var(--success-color);
+  color: #fff;
+}
