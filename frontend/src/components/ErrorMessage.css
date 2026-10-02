@@ -41,6 +41,13 @@
   font-weight: 600;
 }
 
-.error-banner-retry:hover {
-  opacity: 0.8;
+@media (hover: hover) and (pointer: fine) {
+  .error-banner-retry:hover {
+    opacity: 0.8;
+  }
+}
+
+.error-banner-retry:active {
+  opacity: 0.65;
+  transform: scale(0.96);
 }

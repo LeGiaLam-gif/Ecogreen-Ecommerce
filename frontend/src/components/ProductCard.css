@@ -55,6 +55,7 @@
   line-height: 1.3;
   display: -webkit-box;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -70,7 +71,8 @@
   gap: 10px;
 }
 
-.btn-add-cart, .btn-detail {
+.btn-add-cart,
+.btn-detail {
   flex: 1;
   padding: 10px;
   border-radius: 8px;
@@ -90,7 +92,7 @@
 }
 
 .btn-add-cart:hover {
-  background-color: #E4EFE0;
+  background-color: #e8f0fe;
   transform: scale(1.02);
 }
 
@@ -100,7 +102,7 @@
 }
 
 .btn-detail:hover {
-  background-color: var(--primary-hover);
+  background-color: #434344;
   transform: scale(1.02);
 }
 
@@ -108,40 +110,75 @@
   .product-card {
     padding: 12px;
   }
+
   .product-name {
     font-size: 0.95rem;
   }
+
   .product-price {
     font-size: 1rem;
   }
-  .btn-add-cart, .btn-detail {
+
+  .btn-add-cart,
+  .btn-detail {
     padding: 8px 4px;
     font-size: 0.75rem;
   }
 }
 
 /* --- EcoGreen additions --- */
+.product-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 4px 8px;
+  border-radius: 6px;
+  z-index: 2;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+  letter-spacing: 0.2px;
+}
+
+.badge-recycled {
+  background: #2e7d32;
+  color: #ffffff;
+}
+
+.badge-bestseller {
+  background: #e65100;
+  color: #ffffff;
+}
+
+.badge-new {
+  background: #0277bd;
+  color: #ffffff;
+}
+
 .product-badge-outofstock {
   position: absolute;
   top: 8px;
   right: 8px;
-  background: var(--danger-color);
+  background: #c62828;
   color: #fff;
   font-size: 0.7rem;
   font-weight: 700;
   padding: 4px 8px;
   border-radius: 6px;
+  z-index: 2;
 }
+
 .product-category {
   display: inline-block;
   font-size: 0.72rem;
-  color: var(--success-color);
+  color: #2e7d32;
   background: #e8f5e9;
   padding: 2px 8px;
   border-radius: 10px;
   margin-bottom: 4px;
   width: fit-content;
 }
+
 .btn-add-cart:disabled {
   opacity: 0.5;
   cursor: not-allowed;

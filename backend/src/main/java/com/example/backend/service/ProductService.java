@@ -27,7 +27,7 @@ public class ProductService {
 
     public Product getById(Long id) {
         return productRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Product not found: " + id));
+                .orElseThrow(() -> new ResourceNotFoundException("Không tìm thấy sản phẩm #" + id));
     }
 
     public Product create(String name, String description, BigDecimal price, int stockQuantity,
@@ -70,9 +70,9 @@ public class ProductService {
     }
 
     private void validate(String name, BigDecimal price, int stockQuantity, Long categoryId) {
-        if (name == null || name.isBlank()) throw new BadRequestException("Product name is required.");
-        if (price == null || price.compareTo(BigDecimal.ZERO) < 0) throw new BadRequestException("Price must be >= 0.");
-        if (stockQuantity < 0) throw new BadRequestException("Stock quantity cannot be negative.");
-        if (categoryId == null) throw new BadRequestException("Category is required.");
+        if (name == null || name.isBlank()) throw new BadRequestException("Tên sản phẩm không được để trống.");
+        if (price == null || price.compareTo(BigDecimal.ZERO) < 0) throw new BadRequestException("Giá sản phẩm phải lớn hơn hoặc bằng 0.");
+        if (stockQuantity < 0) throw new BadRequestException("Số lượng tồn kho không được âm.");
+        if (categoryId == null) throw new BadRequestException("Vui lòng chọn danh mục cho sản phẩm.");
     }
 }

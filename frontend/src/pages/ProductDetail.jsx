@@ -23,7 +23,7 @@ const ProductDetail = () => {
                 const data = await getProductById(id);
                 setProduct(data);
                 setQuantity(1);
-            } catch (error) {
+            } catch {
                 setProduct(null);
             } finally {
                 setLoading(false);
@@ -49,7 +49,7 @@ const ProductDetail = () => {
         try {
             await addToCart(product.id, quantity);
         } catch (err) {
-            setActionError(err.friendlyMessage || 'Could not add this product to the cart.');
+            setActionError(err.friendlyMessage || 'Không thể thêm sản phẩm này vào giỏ hàng.');
         }
     };
 
@@ -60,7 +60,7 @@ const ProductDetail = () => {
             await addToCart(product.id, quantity);
             navigate('/cart');
         } catch (err) {
-            setActionError(err.friendlyMessage || 'Could not add this product to the cart.');
+            setActionError(err.friendlyMessage || 'Không thể thêm sản phẩm này vào giỏ hàng.');
         }
     };
 
@@ -73,9 +73,9 @@ const ProductDetail = () => {
     if (!product) return (
         <div className="pd-error-container">
             <div className="pd-error-icon">⚠️</div>
-            <h2>Product not found</h2>
-            <p>It may have been removed, or the link is incorrect.</p>
-            <button className="pd-error-btn" onClick={() => navigate('/')}>Back to home</button>
+            <h2>Không tìm thấy sản phẩm</h2>
+            <p>Sản phẩm có thể đã ngừng bán hoặc đường dẫn không chính xác.</p>
+            <button className="pd-error-btn" onClick={() => navigate('/')}>Quay lại trang chủ</button>
         </div>
     );
 
@@ -84,7 +84,7 @@ const ProductDetail = () => {
           <div className="pd-container">
               <nav className="pd-breadcrumb">
                   <button className="pd-back-link" onClick={() => navigate(-1)}>
-                     &#8592; Back
+                     &#8592; Quay lại
                   </button>
                   <span className="breadcrumb-divider">/</span>
                   <span className="breadcrumb-current">{product.name}</span>
@@ -106,22 +106,22 @@ const ProductDetail = () => {
                           {product.categoryName && <span className="pd-category-tag">{product.categoryName}</span>}
                           <h1 className="pd-name">{product.name}</h1>
                           <div className="pd-price-badge">
-                              <span className="pd-price-label">Price:</span>
+                              <span className="pd-price-label">Giá:</span>
                               <span className="pd-current-price">{Number(product.price).toLocaleString()} ₫</span>
                           </div>
                           <p className={outOfStock ? 'pd-stock-out' : 'pd-stock-in'}>
-                              {outOfStock ? 'Out of stock' : `In stock: ${product.stockQuantity}`}
+                              {outOfStock ? 'Hết hàng' : `Còn hàng: ${product.stockQuantity} sản phẩm`}
                           </p>
                       </div>
 
                       <div className="pd-section">
-                          <h3 className="section-title">Description</h3>
-                          <p className="pd-desc-text">{product.description || 'No description provided.'}</p>
+                          <h3 className="section-title">Mô tả sản phẩm</h3>
+                          <p className="pd-desc-text">{product.description || 'Chưa có thông tin mô tả chi tiết cho sản phẩm này.'}</p>
                       </div>
 
                       {!outOfStock && (
                           <div className="pd-quantity-row">
-                              <label htmlFor="qty">Quantity</label>
+                              <label htmlFor="qty">Số lượng:</label>
                               <div className="pd-quantity-control">
                                   <button type="button" onClick={() => setQuantity((q) => Math.max(1, q - 1))}>-</button>
                                   <input
@@ -144,10 +144,10 @@ const ProductDetail = () => {
 
                       <div className="pd-cta">
                           <button className="btn-buy-now" onClick={handleBuyNow} disabled={outOfStock}>
-                              <span className="btn-label">BUY NOW</span>
+                              <span className="btn-label">MUA NGAY</span>
                           </button>
                           <button className="btn-add-to-cart-outline" onClick={handleAddToCart} disabled={outOfStock}>
-                              <span>Add to cart</span>
+                              <span>Thêm vào giỏ hàng</span>
                           </button>
                       </div>
                   </div>

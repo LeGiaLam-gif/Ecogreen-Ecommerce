@@ -119,3 +119,65 @@
     padding: 24px 12px;
   }
 }
+
+/* =====================================================
+   EcoGreen Commit Strip
+   ===================================================== */
+.eco-commit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0;
+  background: linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%);
+  border: 1px solid #bbf7d0;
+  border-radius: 16px;
+  padding: 20px 32px;
+  margin-bottom: 36px;
+  max-width: 1280px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.eco-commit-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 1;
+  min-width: 180px;
+  padding: 8px 20px;
+}
+
+.eco-commit-icon {
+  font-size: 2rem;
+  flex-shrink: 0;
+}
+
+.eco-commit-item div strong {
+  display: block;
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #166534;
+  margin-bottom: 2px;
+}
+
+.eco-commit-item div p {
+  font-size: 0.78rem;
+  color: #4ade80;
+  color: #16a34a;
+  margin: 0;
+}
+
+.eco-commit-divider {
+  width: 1px;
+  height: 40px;
+  background: #bbf7d0;
+  flex-shrink: 0;
+}
+
+@media (max-width: 768px) {
+  .eco-commit { flex-direction: column; gap: 12px; padding: 16px; }
+  .eco-commit-divider { width: 60%; height: 1px; }
+  .eco-commit-item { padding: 4px 12px; min-width: auto; }
+}
+

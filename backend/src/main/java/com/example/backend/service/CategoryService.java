@@ -20,12 +20,12 @@ public class CategoryService {
 
     public Category getById(Long id) {
         return categoryRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Category not found: " + id));
+                .orElseThrow(() -> new ResourceNotFoundException("Không tìm thấy danh mục #" + id));
     }
 
     public Category create(String name, String description) {
         if (categoryRepository.existsByNameIgnoreCase(name)) {
-            throw new ConflictException("Category name already exists: " + name);
+            throw new ConflictException("Tên danh mục này đã tồn tại: " + name);
         }
         Category c = new Category();
         c.setName(name);

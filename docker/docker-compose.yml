@@ -6,11 +6,10 @@ services:
     container_name: ecogreen-postgres
     restart: always
     environment:
-      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
-      POSTGRES_DB: ${DB_NAME:-ecogreen}
-      POSTGRES_USER: ${DB_USERNAME:-postgres}
+      POSTGRES_PASSWORD: 123456
+      POSTGRES_DB: ecogreen
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ../database/init-postgres.sql:/docker-entrypoint-initdb.d/init.sql

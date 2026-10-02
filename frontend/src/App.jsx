@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-route
 import { AuthProvider } from './context/AuthContext';
 import { CartProvider } from './context/CartContext';
 import Navbar from './components/Navbar';
+import LiveChatWidget from './components/LiveChatWidget';
 import Home from './pages/Home';
 import ProductDetail from './pages/ProductDetail';
 import Login from './pages/Login';
@@ -13,6 +14,9 @@ import Payment from './pages/Payment';
 import OrderSuccess from './pages/OrderSuccess';
 import Orders from './pages/Orders';
 import OrderDetail from './pages/OrderDetail';
+import FAQ from './pages/FAQ';
+import ContactUs from './pages/ContactUs';
+import ReturnPolicy from './pages/ReturnPolicy';
 import AdminDashboard from './pages/admin/AdminDashboard';
 import ProtectedRoute from './components/ProtectedRoute';
 import './App.css';
@@ -40,6 +44,11 @@ function AppContent() {
           <Route path="/register" element={<Register />} />
           <Route path="/cart" element={<Cart />} />
 
+          {/* CSKH & Chính sách - không cần đăng nhập */}
+          <Route path="/faq" element={<FAQ />} />
+          <Route path="/contact" element={<ContactUs />} />
+          <Route path="/policy/returns" element={<ReturnPolicy />} />
+
           <Route path="/checkout" element={<ProtectedRoute><Checkout /></ProtectedRoute>} />
           <Route path="/payment/:orderId" element={<ProtectedRoute><Payment /></ProtectedRoute>} />
           <Route path="/order-success/:orderId" element={<ProtectedRoute><OrderSuccess /></ProtectedRoute>} />
@@ -57,6 +66,9 @@ function AppContent() {
           />
         </Routes>
       </main>
+
+      {/* Widget hỗ trợ khách hàng - hiện toàn bộ storefront (trừ admin) */}
+      {!isAdminPath && <LiveChatWidget />}
     </div>
   );
 }

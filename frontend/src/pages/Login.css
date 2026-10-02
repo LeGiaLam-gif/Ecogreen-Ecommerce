@@ -1,0 +1,495 @@
+/* =====================================================================
+   Shopee-Style E-Commerce Authentication (Login & Register)
+   ===================================================================== */
+
+.shopee-auth-page {
+  min-height: calc(100vh - 80px);
+  background: linear-gradient(135deg, #065f46 0%, #047857 40%, #059669 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  position: relative;
+  overflow: hidden;
+}
+
+.shopee-auth-page::before {
+  content: '';
+  position: absolute;
+  top: -100px;
+  right: -100px;
+  width: 450px;
+  height: 450px;
+  background: radial-gradient(circle, rgba(52, 211, 153, 0.15) 0%, transparent 70%);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.shopee-auth-container {
+  width: 100%;
+  max-width: 1080px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 40px;
+  margin: 0 auto;
+}
+
+/* Left Brand Showcase */
+.shopee-auth-brand-side {
+  flex: 1;
+  color: #ffffff;
+  padding: 20px;
+}
+
+.eco-brand-hero-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.brand-logo-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-icon-big {
+  font-size: 3rem;
+  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.2));
+}
+
+.brand-title-big {
+  font-size: 2.8rem;
+  font-weight: 800;
+  letter-spacing: -1px;
+  color: #ffffff;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.brand-tagline {
+  font-size: 1.65rem;
+  font-weight: 700;
+  line-height: 1.35;
+  color: #ecfdf5;
+}
+
+.brand-subtext {
+  font-size: 1.05rem;
+  line-height: 1.6;
+  color: #a7f3d0;
+  max-width: 480px;
+}
+
+.eco-stats-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 20px;
+  background: rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(10px);
+  padding: 14px 24px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  margin-top: 10px;
+  width: fit-content;
+}
+
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stat-item strong {
+  font-size: 1.25rem;
+  color: #ffffff;
+}
+
+.stat-item span {
+  font-size: 0.78rem;
+  color: #d1fae5;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.stat-separator {
+  width: 1px;
+  height: 28px;
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* Right Card Side */
+.shopee-auth-card-side {
+  width: 100%;
+  max-width: 420px;
+  flex-shrink: 0;
+}
+
+.shopee-login-card {
+  background: #ffffff;
+  border-radius: 10px;
+  padding: 32px 30px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+}
+
+/* Card Header */
+.shopee-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.shopee-form-title {
+  font-size: 1.35rem;
+  font-weight: 600;
+  color: #222222;
+  margin: 0;
+}
+
+.shopee-qr-tip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 2px solid #ffb703;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: #fffdf5;
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+
+.shopee-qr-tip:hover {
+  transform: scale(1.03);
+}
+
+.qr-tip-text {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #d97706;
+}
+
+.qr-icon-svg {
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+/* Alerts */
+.shopee-alert-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 0.84rem;
+  margin-bottom: 16px;
+  animation: alertFadeIn 0.2s ease;
+}
+
+@keyframes alertFadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.shopee-alert-box.error {
+  background: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+}
+
+/* Forms */
+.shopee-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.shopee-input-group {
+  position: relative;
+  width: 100%;
+}
+
+.shopee-input {
+  width: 100%;
+  padding: 12px 14px;
+  font-size: 0.92rem;
+  border: 1px solid #dbdbdb;
+  border-radius: 4px;
+  outline: none;
+  background: #ffffff;
+  color: #222222;
+  box-sizing: border-box;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.shopee-input:focus {
+  border-color: #059669;
+  box-shadow: 0 0 0 2px rgba(5, 150, 105, 0.15);
+}
+
+/* Password Group with eye and forgot */
+.password-group {
+  display: flex;
+  align-items: center;
+}
+
+.password-group .shopee-input {
+  padding-right: 120px;
+}
+
+.shopee-eye-toggle {
+  position: absolute;
+  right: 90px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: transparent;
+  border: none;
+  color: #888888;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+}
+
+.shopee-eye-toggle:hover {
+  color: #222222;
+}
+
+.shopee-forgot-link {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: transparent;
+  border: none;
+  font-size: 0.78rem;
+  color: #059669;
+  cursor: pointer;
+  padding: 4px;
+  text-decoration: none;
+}
+
+.shopee-forgot-link:hover {
+  text-decoration: underline;
+}
+
+/* Submit Button */
+.shopee-btn-submit {
+  width: 100%;
+  padding: 12px;
+  background: #059669;
+  color: #ffffff;
+  border: none;
+  border-radius: 4px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  transition: background 0.2s, transform 0.1s;
+  margin-top: 4px;
+}
+
+.shopee-btn-submit:hover:not(:disabled) {
+  background: #047857;
+}
+
+.shopee-btn-submit:active:not(:disabled) {
+  transform: scale(0.99);
+}
+
+.shopee-btn-submit:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+/* Options row */
+.shopee-options-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: #555555;
+}
+
+.shopee-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.shopee-help-tip {
+  color: #999999;
+  cursor: help;
+  font-size: 0.75rem;
+}
+
+/* Divider: HOẶC */
+.shopee-divider {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 20px 0 16px 0;
+}
+
+.divider-line {
+  flex: 1;
+  height: 1px;
+  background: #e5e7eb;
+}
+
+.divider-text {
+  font-size: 0.75rem;
+  color: #9ca3af;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+/* Social Buttons */
+.shopee-social-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.shopee-social-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  border-radius: 4px;
+  background: #ffffff;
+  cursor: pointer;
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: #374151;
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+
+.shopee-social-btn:hover {
+  background: #f9fafb;
+  border-color: rgba(0, 0, 0, 0.3);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.btn-google {
+  color: #1f2937;
+}
+
+/* Legal Note */
+.shopee-legal-note {
+  font-size: 0.75rem;
+  color: #6b7280;
+  text-align: center;
+  margin: 18px 0 0 0;
+  line-height: 1.45;
+}
+
+.shopee-legal-note a {
+  color: #059669;
+  text-decoration: none;
+}
+
+.shopee-legal-note a:hover {
+  text-decoration: underline;
+}
+
+/* Switch Auth link */
+.shopee-switch-auth {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 0.88rem;
+  color: #6b7280;
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid #f3f4f6;
+}
+
+.shopee-register-link {
+  color: #059669;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.shopee-register-link:hover {
+  text-decoration: underline;
+}
+
+/* Modal Popup (Forgot password, etc.) */
+.shopee-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 16px;
+}
+
+.shopee-modal-box {
+  background: #ffffff;
+  border-radius: 10px;
+  width: 100%;
+  max-width: 420px;
+  overflow: hidden;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+}
+
+.shopee-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.shopee-modal-header h3 {
+  font-size: 1.1rem;
+  color: #111827;
+  margin: 0;
+}
+
+.btn-close-x {
+  background: transparent;
+  border: none;
+  font-size: 1rem;
+  color: #9ca3af;
+  cursor: pointer;
+}
+
+.shopee-modal-body {
+  padding: 20px;
+  font-size: 0.92rem;
+  color: #374151;
+  line-height: 1.5;
+}
+
+.shopee-modal-footer {
+  padding: 12px 20px 20px;
+}
+
+/* Responsive */
+@media (max-width: 860px) {
+  .shopee-auth-brand-side {
+    display: none;
+  }
+
+  .shopee-auth-container {
+    justify-content: center;
+  }
+
+  .shopee-auth-card-side {
+    max-width: 460px;
+  }
+}

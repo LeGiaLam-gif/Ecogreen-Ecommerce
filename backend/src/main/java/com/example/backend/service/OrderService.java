@@ -31,49 +31,42 @@ public class OrderService {
 
     @Transactional
     public Order checkout(User user, String customerName, String customerPhone, String shippingAddress,
-                           String paymentMethod, String deliveryNote) {
+                           String paymentMethod) {
         Cart cart = cartRepository.findByUserId(user.getId())
-                .orElseThrow(() -> new ResourceNotFoundException("Cart not found."));
+                .orElseThrow(() -> new ResourceNotFoundException("Không tìm thấy giỏ hàng."));
 
         List<CartItem> cartItems = cartItemRepository.findByCartId(cart.getId());
         if (cartItems.isEmpty()) {
-            throw new BadRequestException("Your cart is empty.");
+            throw new BadRequestException("Giỏ hàng của bạn đang trống.");
         }
         if (customerName == null || customerName.isBlank()
                 || customerPhone == null || customerPhone.isBlank()
                 || shippingAddress == null || shippingAddress.isBlank()) {
-            throw new BadRequestException("Customer name, phone and shipping address are required.");
+            throw new BadRequestException("Vui lòng nhập đầy đủ tên người nhận, số điện thoại và địa chỉ giao hàng.");
         }
 
         // 1. Re-validate every product & stock straight from the database.
         BigDecimal total = BigDecimal.ZERO;
         for (CartItem item : cartItems) {
             Product product = productRepository.findById(item.getProduct().getId())
-                    .orElseThrow(() -> new ResourceNotFoundException("Product no longer exists."));
+                    .orElseThrow(() -> new ResourceNotFoundException("Sản phẩm không còn tồn tại."));
             if (product.getStatus() != Product.Status.ACTIVE) {
-                throw new BadRequestException("\"" + product.getName() + "\" is no longer available.");
+                throw new BadRequestException("Sản phẩm \"" + product.getName() + "\" hiện không còn kinh doanh.");
             }
             if (item.getQuantity() > product.getStockQuantity()) {
-                throw new BadRequestException("Not enough stock for \"" + product.getName() + "\".");
+                throw new BadRequestException("Không đủ số lượng tồn kho cho sản phẩm \"" + product.getName() + "\".");
             }
             total = total.add(product.getPrice().multiply(BigDecimal.valueOf(item.getQuantity())));
         }
 
-        String normalizedMethod = (paymentMethod != null && !paymentMethod.isBlank()) ? paymentMethod : "COD";
-
         // 2. Create the order (with a shipping/customer snapshot).
-        // COD ("cash on delivery") means the customer hasn't paid yet - the order
-        // is already CONFIRMED for fulfillment, but payment stays PENDING until
-        // the courier collects cash and an admin confirms it. MOCK_PAYMENT keeps
-        // the previous behaviour of staying PENDING until "PAY NOW" succeeds.
         Order order = new Order();
         order.setUser(user);
         order.setCustomerName(customerName);
         order.setCustomerPhone(customerPhone);
         order.setShippingAddress(shippingAddress);
-        order.setDeliveryNote(deliveryNote);
         order.setTotalPrice(total);
-        order.setStatus("COD".equalsIgnoreCase(normalizedMethod) ? Order.Status.CONFIRMED : Order.Status.PENDING);
+        order.setStatus(Order.Status.PENDING);
         order = orderRepository.save(order);
 
         // 3. Create order_items at the CURRENT price, and decrease stock.
@@ -94,7 +87,7 @@ public class OrderService {
         // 4. Create a pending payment for the mock payment flow.
         Payment payment = new Payment();
         payment.setOrder(order);
-        payment.setPaymentMethod(normalizedMethod);
+        payment.setPaymentMethod(paymentMethod != null ? paymentMethod : "COD");
         payment.setAmount(total);
         payment.setStatus(Payment.Status.PENDING);
         paymentRepository.save(payment);
@@ -119,14 +112,14 @@ public class OrderService {
 
     public Order getById(Long id) {
         return orderRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Order not found: " + id));
+                .orElseThrow(() -> new ResourceNotFoundException("Không tìm thấy đơn hàng #" + id));
     }
 
     /** A user may only view their own order; an admin may view any order. */
     public Order getOwnedOrAdmin(Long orderId, User user, boolean isAdmin) {
         Order order = getById(orderId);
         if (!isAdmin && !order.getUser().getId().equals(user.getId())) {
-            throw new ForbiddenException("You do not have access to this order.");
+            throw new ForbiddenException("Bạn không có quyền truy cập đơn hàng này.");
         }
         return order;
     }
@@ -134,32 +127,6 @@ public class OrderService {
     public Order updateStatus(Long orderId, String status) {
         Order order = getById(orderId);
         order.setStatus(Order.Status.valueOf(status));
-        return orderRepository.save(order);
-    }
-
-    /**
-     * Admin-only action: mark a COD order as "cash collected on delivery".
-     * Only valid for orders whose payment method is COD and whose payment is
-     * still PENDING - this is intentionally NOT exposed for MOCK_PAYMENT
-     * orders, which follow the online "PAY NOW" flow instead.
-     */
-    @Transactional
-    public Order confirmCodPayment(Long orderId) {
-        Order order = getById(orderId);
-        Payment payment = paymentRepository.findByOrderId(orderId)
-                .orElseThrow(() -> new ResourceNotFoundException("Payment not found for order: " + orderId));
-
-        if (!"COD".equalsIgnoreCase(payment.getPaymentMethod())) {
-            throw new BadRequestException("This action only applies to COD orders.");
-        }
-        if (payment.getStatus() == Payment.Status.SUCCESS) {
-            throw new BadRequestException("Payment for this order has already been confirmed.");
-        }
-
-        payment.setStatus(Payment.Status.SUCCESS);
-        paymentRepository.save(payment);
-
-        order.setStatus(Order.Status.PAID);
         return orderRepository.save(order);
     }
 }

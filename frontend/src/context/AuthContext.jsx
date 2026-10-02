@@ -11,8 +11,12 @@ export const useAuth = () => {
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(() => {
-    const stored = localStorage.getItem('user');
-    return stored ? JSON.parse(stored) : null;
+    try {
+      const stored = localStorage.getItem('user');
+      return stored ? JSON.parse(stored) : null;
+    } catch {
+      return null;
+    }
   });
   const [loading, setLoading] = useState(false);
 
@@ -48,6 +52,19 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  const loginWithGoogle = async (googleData) => {
+    setLoading(true);
+    try {
+      const data = await authApi.loginWithGoogle(googleData);
+      localStorage.setItem('token', data.token);
+      localStorage.setItem('user', JSON.stringify(data.user));
+      setUser(data.user);
+      return data.user;
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const register = async (username, email, password) => {
     setLoading(true);
     try {
@@ -67,8 +84,9 @@ export const AuthProvider = ({ children }) => {
   const isAdmin = !!user?.roles?.includes('ADMIN');
 
   return (
-    <AuthContext.Provider value={{ user, isAdmin, loading, login, register, logout }}>
+    <AuthContext.Provider value={{ user, isAdmin, loading, login, loginWithGoogle, register, logout }}>
       {children}
     </AuthContext.Provider>
   );
 };
+

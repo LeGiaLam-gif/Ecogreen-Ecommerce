@@ -75,8 +75,8 @@ cd backend
 ./mvnw spring-boot:run
 ```
 
-Backend chạy ở `http://localhost:8081`, kết nối PostgreSQL tại `localhost:5432`.
-Sửa `backend/src/main/resources/application.properties` nếu bạn dùng
+Backend chạy ở `http://localhost:8081`, kết nối PostgreSQL tại `localhost:5433`
+(port map từ docker-compose). Sửa `backend/src/main/resources/application.properties` nếu bạn dùng
 cổng/thông tin đăng nhập khác.
 
 ### 3. Chạy frontend

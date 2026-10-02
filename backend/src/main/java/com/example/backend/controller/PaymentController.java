@@ -33,4 +33,14 @@ public class PaymentController {
         orderService.getOwnedOrAdmin(orderId, user, authGuard.isAdmin(request));
         return PaymentResponse.from(paymentService.payNow(orderId));
     }
+
+    /** Cập nhật phương thức thanh toán: COD / VIETQR / MOMO */
+    @PutMapping("/order/{orderId}/method")
+    public PaymentResponse updateMethod(@PathVariable Long orderId,
+                                        @RequestBody java.util.Map<String, String> body,
+                                        HttpServletRequest request) {
+        User user = authGuard.requireUser(request);
+        orderService.getOwnedOrAdmin(orderId, user, authGuard.isAdmin(request));
+        return PaymentResponse.from(paymentService.updateMethod(orderId, body.get("method")));
+    }
 }

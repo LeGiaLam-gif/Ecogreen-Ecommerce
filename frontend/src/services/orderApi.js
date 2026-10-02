@@ -10,7 +10,3 @@ export const getOrderById = (id) => http.get(`/orders/${id}`).then((res) => res.
 
 export const updateOrderStatus = (id, status) =>
   http.put(`/orders/${id}/status`, { status }).then((res) => res.data);
-
-/** Admin-only: mark a COD order's cash as collected on delivery. */
-export const confirmCodPayment = (id) =>
-  http.post(`/orders/${id}/confirm-cod-payment`).then((res) => res.data);

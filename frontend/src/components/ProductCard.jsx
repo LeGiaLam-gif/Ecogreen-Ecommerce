@@ -5,11 +5,19 @@ import { useCart } from '../context/CartContext';
 import { resolveProductImage } from '../utils/imageResolver';
 import './ProductCard.css';
 
+const getBadge = (product) => {
+  if (product.stockQuantity <= 0) return null;
+  if (product.id % 3 === 1) return { text: '🌿 Bán chạy', className: 'badge-bestseller' };
+  if (product.id % 3 === 2) return { text: '✨ Mới về', className: 'badge-new' };
+  return { text: '♻️ 100% Tái chế', className: 'badge-recycled' };
+};
+
 const ProductCard = ({ product }) => {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { addToCart } = useCart();
   const outOfStock = product.stockQuantity <= 0;
+  const badge = getBadge(product);
 
   const handleAddToCart = async (e) => {
     e.stopPropagation();
@@ -21,7 +29,7 @@ const ProductCard = ({ product }) => {
     try {
       await addToCart(product.id, 1);
     } catch (err) {
-      alert(err.friendlyMessage || 'Could not add this product to the cart.');
+      alert(err.friendlyMessage || 'Không thể thêm sản phẩm vào giỏ hàng.');
     }
   };
 
@@ -33,13 +41,14 @@ const ProductCard = ({ product }) => {
   return (
     <div className="product-card" onClick={handleViewDetail}>
       <div className="product-image-container">
+        {badge && <span className={`product-badge ${badge.className}`}>{badge.text}</span>}
         <img
           src={resolveProductImage(product.image)}
           alt={product.name}
           className="product-image"
           loading="lazy"
         />
-        {outOfStock && <span className="product-badge-outofstock">Out of stock</span>}
+        {outOfStock && <span className="product-badge-outofstock">Hết hàng</span>}
       </div>
 
       <div className="product-info">
@@ -50,10 +59,10 @@ const ProductCard = ({ product }) => {
 
       <div className="product-actions">
         <button className="btn-add-cart" onClick={handleAddToCart} disabled={outOfStock}>
-          <span>Add to cart</span>
+          <span>{outOfStock ? 'Hết hàng' : '+ Thêm giỏ hàng'}</span>
         </button>
         <button className="btn-detail" onClick={handleViewDetail}>
-          <span>Details</span>
+          <span>Xem chi tiết</span>
         </button>
       </div>
     </div>

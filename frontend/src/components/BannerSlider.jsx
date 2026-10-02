@@ -1,91 +1,140 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import './BannerSlider.css';
 
 // Tự động quét toàn bộ ảnh trong thư mục assets/banner
 const bannerModules = import.meta.glob('../assets/banner/*.{png,jpg,jpeg,webp}', { eager: true });
 
+// Nội dung text tương ứng với từng banner
+const BANNER_CONTENT = [
+  {
+    title: 'Sống Xanh Mỗi Ngày',
+    subtitle: 'Sản phẩm thân thiện môi trường — được làm từ vật liệu tái chế 100%',
+    cta: 'Khám Phá Ngay',
+    ctaLink: '/',
+    tag: '🌿 Eco Lifestyle',
+    align: 'left',
+  },
+  {
+    title: 'Tái Chế Là Tương Lai',
+    subtitle: 'Từ balo đay Nepal đến rèm polyester tái sinh — thiên nhiên cảm ơn bạn',
+    cta: 'Mua Ngay',
+    ctaLink: '/',
+    tag: '♻️ Recycled Products',
+    align: 'left',
+  },
+  {
+    title: 'Không Rác Thải Nhựa',
+    subtitle: 'Đóng gói xanh, giấy tái chế & sợi tự nhiên — ít nhựa hơn mỗi ngày',
+    cta: 'Xem Bộ Sưu Tập',
+    ctaLink: '/',
+    tag: '🌍 Zero Waste',
+    align: 'right',
+  },
+  {
+    title: 'Ưu Đãi Cuối Tuần',
+    subtitle: 'Sản phẩm sinh thái chọn lọc — giao hàng miễn phí cho đơn từ 500K',
+    cta: 'Nhận Ưu Đãi',
+    ctaLink: '/',
+    tag: '🎁 Weekend Sale',
+    align: 'center',
+  },
+];
+
 const BannerSlider = () => {
-    // Chuyển đổi các module ảnh thành mảng dữ liệu banner
-    const bannerItems = Object.entries(bannerModules).map(([path, module], index) => {
-        const filename = path.split('/').pop().split('.')[0];
-        // Đổi tên "banner1" thành "Khuyến mãi 1" hoặc giữ nguyên tùy ý, ở đây tôi định dạng lại cho đẹp
-        const title = filename.charAt(0).toUpperCase() + filename.slice(1);
-        
-        return {
-            id: index + 1,
-            image: module.default,
-            title: title.replace(/\d+/, (match) => ` #${match}`), // ví dụ: Banner1 -> Banner #1
-            description: "Khám phá các chương trình ưu đãi mới nhất chỉ có tại EcoGreen."
-        };
-    });
+  const bannerImages = Object.values(bannerModules).map((m) => m.default);
 
-    const [currentIndex, setCurrentIndex] = useState(0);
-    const [isAutoPlaying, setIsAutoPlaying] = useState(true);
-    const timeoutRef = useRef(null);
+  const bannerItems = bannerImages.map((image, index) => ({
+    id: index + 1,
+    image,
+    ...BANNER_CONTENT[index % BANNER_CONTENT.length],
+  }));
 
-    const resetTimeout = () => {
-        if (timeoutRef.current) {
-            clearTimeout(timeoutRef.current);
-        }
-    };
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [isAutoPlaying, setIsAutoPlaying] = useState(true);
+  const [animating, setAnimating] = useState(false);
+  const timeoutRef = useRef(null);
 
-    const nextSlide = () => {
-        setCurrentIndex((prev) => (prev === bannerItems.length - 1 ? 0 : prev + 1));
-    };
+  const resetTimeout = () => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+  };
 
-    const prevSlide = () => {
-        setCurrentIndex((prev) => (prev === 0 ? bannerItems.length - 1 : prev - 1));
-    };
+  const goToSlide = (index) => {
+    if (animating || index === currentIndex) return;
+    setAnimating(true);
+    setCurrentIndex(index);
+    setTimeout(() => setAnimating(false), 700);
+  };
 
-    const goToSlide = (index) => {
-        setCurrentIndex(index);
-    };
+  const nextSlide = () => goToSlide((currentIndex + 1) % bannerItems.length);
+  const prevSlide = () => goToSlide((currentIndex - 1 + bannerItems.length) % bannerItems.length);
 
-    useEffect(() => {
-        if (isAutoPlaying) {
-            resetTimeout();
-            timeoutRef.current = setTimeout(nextSlide, 4000);
-        }
-        return () => resetTimeout();
-    }, [currentIndex, isAutoPlaying]);
+  useEffect(() => {
+    if (isAutoPlaying) {
+      resetTimeout();
+      timeoutRef.current = setTimeout(nextSlide, 5000);
+    }
+    return () => resetTimeout();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentIndex, isAutoPlaying]);
 
-    if (!bannerItems.length) return null;
+  if (!bannerItems.length) return null;
 
-    return (
-        <div 
-            className="banner-slider"
-            onMouseEnter={() => setIsAutoPlaying(false)}
-            onMouseLeave={() => setIsAutoPlaying(true)}
+  const current = bannerItems[currentIndex];
+
+  return (
+    <div
+      className="banner-slider"
+      onMouseEnter={() => setIsAutoPlaying(false)}
+      onMouseLeave={() => setIsAutoPlaying(true)}
+    >
+      {/* Slides */}
+      <div className="slider-container-inner">
+        <div
+          className="slider-wrapper"
+          style={{ transform: `translateX(-${currentIndex * 100}%)` }}
         >
-            <div className="slider-container-inner">
-                <div 
-                    className="slider-wrapper" 
-                    style={{ transform: `translateX(-${currentIndex * 100}%)` }}
-                >
-                    {bannerItems.map((item, index) => (
-                        <div className="slider-item" key={item.id}>
-                            <img src={item.image} alt={item.title} className="slider-img" />
-                        </div>
-                    ))}
-                </div>
+          {bannerItems.map((item) => (
+            <div className="slider-item" key={item.id}>
+              <img src={item.image} alt={item.title} className="slider-img" />
+              <div className="slider-overlay" />
             </div>
-
-            {/* Điều hướng - Hiện đã nằm ngang hàng với slider-container-inner để có thể căn lọt ra ngoài */}
-            <button className="nav-btn prev" onClick={prevSlide}>&#10094;</button>
-            <button className="nav-btn next" onClick={nextSlide}>&#10095;</button>
-
-            {/* Các chấm chỉ số */}
-            <div className="slider-dots">
-                {bannerItems.map((_, index) => (
-                    <span 
-                        key={index} 
-                        className={`dot ${index === currentIndex ? 'active' : ''}`}
-                        onClick={() => goToSlide(index)}
-                    ></span>
-                ))}
-            </div>
+          ))}
         </div>
-    );
+      </div>
+
+      {/* Text Overlay - re-animates on key change */}
+      <div className={`banner-content banner-content--${current.align}`} key={`content-${currentIndex}`}>
+        <span className="banner-tag">{current.tag}</span>
+        <h2 className="banner-title">{current.title}</h2>
+        <p className="banner-subtitle">{current.subtitle}</p>
+        <Link to={current.ctaLink} className="banner-cta">{current.cta} →</Link>
+      </div>
+
+      {/* Nav Buttons */}
+      <button className="nav-btn prev" onClick={prevSlide} aria-label="Slide trước">&#10094;</button>
+      <button className="nav-btn next" onClick={nextSlide} aria-label="Slide tiếp">&#10095;</button>
+
+      {/* Progress dots */}
+      <div className="slider-dots">
+        {bannerItems.map((_, index) => (
+          <button
+            key={index}
+            className={`dot ${index === currentIndex ? 'active' : ''}`}
+            onClick={() => goToSlide(index)}
+            aria-label={`Banner ${index + 1}`}
+          />
+        ))}
+      </div>
+
+      {/* Auto-play progress bar */}
+      {isAutoPlaying && (
+        <div className="banner-progress">
+          <div className="banner-progress-bar" key={`bar-${currentIndex}`} />
+        </div>
+      )}
+    </div>
+  );
 };
 
 export default BannerSlider;

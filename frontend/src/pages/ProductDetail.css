@@ -135,7 +135,7 @@
 
 .pd-specs-list li::before {
   content: "✓";
-  color: var(--success-color);
+  color: #34c759;
   font-weight: bold;
   margin-right: 12px;
 }
@@ -172,7 +172,7 @@
 }
 
 .btn-buy-now:hover {
-  background-color: var(--primary-hover);
+  background-color: #0077ed;
   transform: translateY(-2px);
 }
 
@@ -199,7 +199,7 @@
 }
 
 .btn-add-to-cart-outline:hover {
-  background-color: var(--secondary-color);
+  background-color: #f5faff;
   transform: translateY(-2px);
 }
 
@@ -236,18 +236,18 @@
 .pd-category-tag {
   display: inline-block;
   background: #e8f5e9;
-  color: var(--success-color);
+  color: #2e7d32;
   padding: 4px 10px;
   border-radius: 12px;
   font-size: 0.8rem;
   font-weight: 600;
   margin-bottom: 8px;
 }
-.pd-stock-in { color: var(--success-color); font-weight: 600; margin-top: 8px; }
-.pd-stock-out { color: var(--danger-color); font-weight: 600; margin-top: 8px; }
+.pd-stock-in { color: #2e7d32; font-weight: 600; margin-top: 8px; }
+.pd-stock-out { color: #c62828; font-weight: 600; margin-top: 8px; }
 .pd-quantity-row { display: flex; align-items: center; gap: 12px; margin: 16px 0; }
 .pd-quantity-control { display: flex; align-items: center; border: 1px solid #ccc; border-radius: 6px; overflow: hidden; }
 .pd-quantity-control button { width: 32px; height: 32px; border: none; background: #f1f1f1; cursor: pointer; font-size: 1rem; }
 .pd-quantity-control input { width: 50px; text-align: center; border: none; border-left: 1px solid #ccc; border-right: 1px solid #ccc; height: 32px; }
-.pd-action-error { color: var(--danger-color); margin: 8px 0; }
+.pd-action-error { color: #c62828; margin: 8px 0; }
 .btn-buy-now:disabled, .btn-add-to-cart-outline:disabled { opacity: 0.5; cursor: not-allowed; }

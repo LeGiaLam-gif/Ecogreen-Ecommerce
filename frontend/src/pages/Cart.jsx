@@ -17,7 +17,7 @@ const Cart = () => {
         try {
             await updateQuantity(item.id, nextQuantity);
         } catch (err) {
-            setError(err.friendlyMessage || 'Could not update quantity.');
+            setError(err.friendlyMessage || 'Không thể cập nhật số lượng sản phẩm.');
         } finally {
             setBusyItemId(null);
         }
@@ -29,7 +29,7 @@ const Cart = () => {
         try {
             await removeFromCart(item.id);
         } catch (err) {
-            setError(err.friendlyMessage || 'Could not remove this item.');
+            setError(err.friendlyMessage || 'Không thể xóa sản phẩm khỏi giỏ hàng.');
         } finally {
             setBusyItemId(null);
         }
@@ -39,10 +39,10 @@ const Cart = () => {
         return (
             <div className="cart-empty-container">
                 <div className="cart-empty-icon">🛍️</div>
-                <h2>Your cart is empty</h2>
-                <p>Browse our eco-friendly products and add something you like!</p>
+                <h2>Giỏ hàng của bạn đang trống</h2>
+                <p>Hãy khám phá các sản phẩm sinh thái xanh và thêm món đồ bạn yêu thích vào giỏ nhé!</p>
                 <button className="cart-back-home" onClick={() => navigate('/')}>
-                    Start shopping
+                    Bắt đầu mua sắm ngay
                 </button>
             </div>
         );
@@ -52,8 +52,8 @@ const Cart = () => {
         <div className="cart-page-wrapper">
             <div className="cart-container">
                 <header className="cart-header">
-                    <h1 className="cart-title">Your cart</h1>
-                    <span className="cart-count">{totalItems} item(s)</span>
+                    <h1 className="cart-title">Giỏ hàng của bạn</h1>
+                    <span className="cart-count">{totalItems} sản phẩm</span>
                 </header>
 
                 {error && <p style={{ color: '#c62828', textAlign: 'center' }}>{error}</p>}
@@ -70,7 +70,7 @@ const Cart = () => {
                                 </div>
                                 <div className="cart-item-info">
                                     <h3 className="cart-item-name">{item.product.name}</h3>
-                                    <p className="cart-item-price">{Number(item.product.price).toLocaleString()} ₫</p>
+                                    <p className="cart-item-price">{Number(item.product.price).toLocaleString('vi-VN')} ₫</p>
 
                                     <div className="cart-item-actions">
                                         <div className="quantity-controls">
@@ -86,12 +86,12 @@ const Cart = () => {
                                             className="remove-btn"
                                             disabled={busyItemId === item.id}
                                             onClick={() => handleRemove(item)}>
-                                            Remove
+                                            Xóa
                                         </button>
                                     </div>
                                 </div>
                                 <div className="cart-item-total">
-                                    {Number(item.subtotal).toLocaleString()} ₫
+                                    {Number(item.subtotal).toLocaleString('vi-VN')} ₫
                                 </div>
                             </div>
                         ))}
@@ -99,27 +99,27 @@ const Cart = () => {
 
                     <div className="cart-summary">
                         <div className="summary-card glass">
-                            <h3>Order summary</h3>
+                            <h3>Tóm tắt đơn hàng</h3>
                             <div className="summary-row">
-                                <span>Subtotal</span>
-                                <span>{Number(totalPrice).toLocaleString()} ₫</span>
+                                <span>Tạm tính</span>
+                                <span>{Number(totalPrice).toLocaleString('vi-VN')} ₫</span>
                             </div>
                             <div className="summary-row">
-                                <span>Shipping</span>
-                                <span className="free-shipping">Free</span>
+                                <span>Phí vận chuyển xanh</span>
+                                <span className="free-shipping">Miễn phí 🌿</span>
                             </div>
                             <div className="summary-divider"></div>
                             <div className="summary-row total">
-                                <span>Total</span>
-                                <span className="total-price">{Number(totalPrice).toLocaleString()} ₫</span>
+                                <span>Tổng thanh toán</span>
+                                <span className="total-price">{Number(totalPrice).toLocaleString('vi-VN')} ₫</span>
                             </div>
                             <button
                                 className="checkout-btn"
                                 onClick={() => navigate('/checkout')}
                             >
-                                PROCEED TO CHECKOUT
+                                TIẾN HÀNH ĐẶT HÀNG
                             </button>
-                            <Link to="/" className="continue-shopping">← Continue shopping</Link>
+                            <Link to="/" className="continue-shopping">← Tiếp tục mua sắm</Link>
                         </div>
                     </div>
                 </div>

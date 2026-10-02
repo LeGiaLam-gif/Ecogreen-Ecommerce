@@ -1,7 +1,7 @@
 import axios from 'axios';
 
-// Backend base URL (Spring Boot runs on 8081 by default - see backend/application.properties)
-export const API_BASE_URL = 'http://localhost:8081/api';
+// Backend base URL (proxied via Vite server to Spring Boot on port 8081)
+export const API_BASE_URL = '/api';
 
 const http = axios.create({ baseURL: API_BASE_URL });
 
@@ -19,29 +19,12 @@ http.interceptors.request.use((config) => {
 http.interceptors.response.use(
   (response) => response,
   (error) => {
-    const status = error?.response?.status;
-    // Only an *authenticated* request (one that carried a bearer token) can
-    // genuinely mean "your session is no longer valid" - a 401 from
-    // /auth/login itself is just "wrong credentials" and must not log
-    // anyone out or redirect them away from the login form.
-    const hadAuthHeader = Boolean(error?.config?.headers?.Authorization);
-    const sessionExpired = status === 401 && hadAuthHeader;
-
-    if (sessionExpired) {
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
-      if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
-        window.location.href = '/login';
-      }
-    }
-
     const message =
       error?.response?.data?.message ||
-      (sessionExpired && 'Your session has expired. Please log in again.') ||
-      (status === 401 && 'Invalid username or password.') ||
-      (status === 403 && 'You do not have permission to do this.') ||
-      (error?.code === 'ERR_NETWORK' && 'Cannot reach the server. Please try again.') ||
-      'Something went wrong. Please try again.';
+      (error?.response?.status === 401 && 'Vui lòng đăng nhập để tiếp tục.') ||
+      (error?.response?.status === 403 && 'Bạn không có quyền thực hiện thao tác này.') ||
+      (error?.code === 'ERR_NETWORK' && 'Không thể kết nối đến máy chủ. Vui lòng kiểm tra lại kết nối mạng.') ||
+      'Đã xảy ra lỗi. Vui lòng thử lại sau.';
     return Promise.reject({ ...error, friendlyMessage: message });
   }
 );

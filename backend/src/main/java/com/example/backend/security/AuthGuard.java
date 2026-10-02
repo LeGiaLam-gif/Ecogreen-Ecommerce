@@ -17,9 +17,9 @@ public class AuthGuard {
 
     public User requireUser(HttpServletRequest request) {
         CurrentUser current = (CurrentUser) request.getAttribute(AuthInterceptor.REQUEST_ATTR);
-        if (current == null) throw new UnauthorizedException("Login required.");
+        if (current == null) throw new UnauthorizedException("Vui lòng đăng nhập để tiếp tục.");
         return userRepository.findById(current.getUserId())
-                .orElseThrow(() -> new UnauthorizedException("Login required."));
+                .orElseThrow(() -> new UnauthorizedException("Vui lòng đăng nhập để tiếp tục."));
     }
 
     public boolean isAdmin(HttpServletRequest request) {
@@ -29,7 +29,7 @@ public class AuthGuard {
 
     public void requireAdmin(HttpServletRequest request) {
         CurrentUser current = (CurrentUser) request.getAttribute(AuthInterceptor.REQUEST_ATTR);
-        if (current == null) throw new UnauthorizedException("Login required.");
-        if (!current.isAdmin()) throw new ForbiddenException("Admin access required.");
+        if (current == null) throw new UnauthorizedException("Vui lòng đăng nhập để tiếp tục.");
+        if (!current.isAdmin()) throw new ForbiddenException("Yêu cầu quyền Quản trị viên (Admin).");
     }
 }

@@ -31,9 +31,6 @@ public class Order {
     @Column(name = "shipping_address", nullable = false, columnDefinition = "TEXT")
     private String shippingAddress;
 
-    @Column(name = "delivery_note", columnDefinition = "TEXT")
-    private String deliveryNote;
-
     @Column(name = "total_price", nullable = false, precision = 12, scale = 2)
     private BigDecimal totalPrice;
 
@@ -72,9 +69,6 @@ public class Order {
 
     public String getShippingAddress() { return shippingAddress; }
     public void setShippingAddress(String shippingAddress) { this.shippingAddress = shippingAddress; }
-
-    public String getDeliveryNote() { return deliveryNote; }
-    public void setDeliveryNote(String deliveryNote) { this.deliveryNote = deliveryNote; }
 
     public BigDecimal getTotalPrice() { return totalPrice; }
     public void setTotalPrice(BigDecimal totalPrice) { this.totalPrice = totalPrice; }

@@ -25,7 +25,7 @@ public class PaymentService {
 
     public Payment getByOrderId(Long orderId) {
         return paymentRepository.findByOrderId(orderId)
-                .orElseThrow(() -> new ResourceNotFoundException("Payment not found for order " + orderId));
+                .orElseThrow(() -> new ResourceNotFoundException("Không tìm thấy thông tin thanh toán cho đơn hàng #" + orderId));
     }
 
     /**
@@ -38,11 +38,7 @@ public class PaymentService {
         Order order = payment.getOrder();
 
         if (order.getStatus() == Order.Status.CANCELLED) {
-            throw new BadRequestException("This order has been cancelled and cannot be paid.");
-        }
-        if ("COD".equalsIgnoreCase(payment.getPaymentMethod())) {
-            throw new BadRequestException(
-                    "COD orders are paid in cash on delivery. Use the admin \"confirm COD payment\" action instead.");
+            throw new BadRequestException("Đơn hàng này đã bị hủy, không thể tiếp tục thanh toán.");
         }
         if (payment.getStatus() == Payment.Status.SUCCESS) {
             return payment; // already paid - idempotent
@@ -56,5 +52,19 @@ public class PaymentService {
         orderRepository.save(order);
 
         return payment;
+    }
+
+    /**
+     * Cập nhật phương thức thanh toán (COD / VIETQR / MOMO).
+     * Chỉ cho phép khi đơn hàng chưa được thanh toán.
+     */
+    @Transactional
+    public Payment updateMethod(Long orderId, String method) {
+        Payment payment = getByOrderId(orderId);
+        if (payment.getStatus() == Payment.Status.SUCCESS) {
+            throw new BadRequestException("Đơn hàng đã được thanh toán, không thể thay đổi phương thức.");
+        }
+        payment.setPaymentMethod(method);
+        return paymentRepository.save(payment);
     }
 }

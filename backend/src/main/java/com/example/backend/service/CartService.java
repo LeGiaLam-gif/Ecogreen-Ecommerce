@@ -39,23 +39,23 @@ public class CartService {
 
     public List<CartItem> getItems(Long userId) {
         Cart cart = cartRepository.findByUserId(userId)
-                .orElseThrow(() -> new ResourceNotFoundException("Cart not found for user " + userId));
+                .orElseThrow(() -> new ResourceNotFoundException("Không tìm thấy giỏ hàng của người dùng #" + userId));
         return cartItemRepository.findByCartId(cart.getId());
     }
 
     public Long getCartId(Long userId) {
         return cartRepository.findByUserId(userId)
-                .orElseThrow(() -> new ResourceNotFoundException("Cart not found for user " + userId))
+                .orElseThrow(() -> new ResourceNotFoundException("Không tìm thấy giỏ hàng của người dùng #" + userId))
                 .getId();
     }
 
     @Transactional
     public List<CartItem> addItem(User user, Long productId, int quantity) {
-        if (quantity <= 0) throw new BadRequestException("Quantity must be greater than zero.");
+        if (quantity <= 0) throw new BadRequestException("Số lượng thêm vào giỏ phải lớn hơn 0.");
 
         Product product = productService.getById(productId);
         if (product.getStatus() != Product.Status.ACTIVE) {
-            throw new BadRequestException("This product is not available.");
+            throw new BadRequestException("Sản phẩm này hiện không còn khả dụng.");
         }
 
         Cart cart = getOrCreateCart(user);
@@ -63,7 +63,7 @@ public class CartService {
 
         int newQuantity = quantity + existing.map(CartItem::getQuantity).orElse(0);
         if (newQuantity > product.getStockQuantity()) {
-            throw new BadRequestException("Only " + product.getStockQuantity() + " item(s) left in stock.");
+            throw new BadRequestException("Kho chỉ còn " + product.getStockQuantity() + " sản phẩm.");
         }
 
         CartItem item = existing.orElseGet(() -> {
@@ -80,14 +80,14 @@ public class CartService {
 
     @Transactional
     public List<CartItem> updateQuantity(User user, Long cartItemId, int quantity) {
-        if (quantity <= 0) throw new BadRequestException("Quantity must be greater than zero.");
+        if (quantity <= 0) throw new BadRequestException("Số lượng phải lớn hơn 0.");
 
         CartItem item = cartItemRepository.findById(cartItemId)
-                .orElseThrow(() -> new ResourceNotFoundException("Cart item not found: " + cartItemId));
+                .orElseThrow(() -> new ResourceNotFoundException("Không tìm thấy sản phẩm trong giỏ hàng #" + cartItemId));
         ensureOwnership(user, item);
 
         if (quantity > item.getProduct().getStockQuantity()) {
-            throw new BadRequestException("Only " + item.getProduct().getStockQuantity() + " item(s) left in stock.");
+            throw new BadRequestException("Kho chỉ còn " + item.getProduct().getStockQuantity() + " sản phẩm.");
         }
         item.setQuantity(quantity);
         cartItemRepository.save(item);
@@ -97,7 +97,7 @@ public class CartService {
     @Transactional
     public List<CartItem> removeItem(User user, Long cartItemId) {
         CartItem item = cartItemRepository.findById(cartItemId)
-                .orElseThrow(() -> new ResourceNotFoundException("Cart item not found: " + cartItemId));
+                .orElseThrow(() -> new ResourceNotFoundException("Không tìm thấy sản phẩm trong giỏ hàng #" + cartItemId));
         ensureOwnership(user, item);
         Long cartId = item.getCart().getId();
         cartItemRepository.delete(item);
@@ -111,7 +111,7 @@ public class CartService {
 
     private void ensureOwnership(User user, CartItem item) {
         if (!item.getCart().getUser().getId().equals(user.getId())) {
-            throw new ResourceNotFoundException("Cart item not found: " + item.getId());
+            throw new ResourceNotFoundException("Không tìm thấy sản phẩm trong giỏ hàng #" + item.getId());
         }
     }
 }

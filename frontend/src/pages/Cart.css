@@ -1,10 +1,12 @@
-.cart-page-wrapper,
-.cart-empty-container {
-    --bg-color: #fbfbfb;
-    --card-bg: rgba(255, 255, 255, 0.85);
-    --text-main: var(--text-color);
+:root {
+    --primary-color: #0071e3;
+    --primary-hover: #0077ed;
+    --bg-color: #fbfbfd;
+    --card-bg: rgba(255, 255, 255, 0.8);
+    --text-main: #1d1d1f;
+    --text-secondary: #86868b;
     --glass-bg: rgba(255, 255, 255, 0.7);
-    --glass-border: var(--border-color);
+    --glass-border: rgba(255, 255, 255, 0.3);
 }
 
 .cart-page-wrapper {
@@ -143,7 +145,7 @@
 .remove-btn {
     border: none;
     background: none;
-    color: var(--danger-color);
+    color: #ff3b30;
     font-size: 0.95rem;
     font-weight: 500;
     cursor: pointer;
@@ -219,7 +221,7 @@
 .checkout-btn {
     width: 100%;
     padding: 20px;
-    background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-hover) 100%);
+    background: linear-gradient(135deg, #0071e3 0%, #0077ed 100%);
     color: #fff;
     border: none;
     border-radius: 18px;

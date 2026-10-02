@@ -26,11 +26,11 @@
 }
 
 .category-item:hover {
-  border-color: var(--success-color);
+  border-color: #2e7d32;
 }
 
 .category-item.active {
-  background-color: var(--success-color);
-  border-color: var(--success-color);
+  background-color: #2e7d32;
+  border-color: #2e7d32;
   color: #fff;
 }

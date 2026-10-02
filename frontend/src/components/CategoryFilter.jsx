@@ -6,7 +6,7 @@ import './CategoryFilter.css';
  * no hard-coded EcoGreen category list here.
  */
 const CategoryFilter = ({ categories, selectedCategoryId, onSelectCategory }) => {
-  const options = [{ id: null, name: 'All' }, ...categories];
+  const options = [{ id: null, name: 'Tất cả' }, ...categories];
 
   return (
     <div className="category-filter-container">

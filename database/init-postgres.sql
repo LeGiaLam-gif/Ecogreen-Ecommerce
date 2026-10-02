@@ -175,9 +175,32 @@ CREATE TABLE IF NOT EXISTS payments (
 CREATE INDEX IF NOT EXISTS idx_payments_order_id ON payments(order_id);
 
 -- ---------------------------------------------------------------------
+-- 11. return_requests - Yêu cầu đổi/trả hàng
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS return_requests (
+    id BIGSERIAL PRIMARY KEY,
+    order_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    reason VARCHAR(100) NOT NULL,
+    description TEXT,
+    image_url VARCHAR(255),
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    admin_note TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_returns_order FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
+    CONSTRAINT fk_returns_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    CONSTRAINT chk_returns_status CHECK (status IN ('PENDING','APPROVED','REJECTED'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_returns_order_id ON return_requests(order_id);
+CREATE INDEX IF NOT EXISTS idx_returns_user_id ON return_requests(user_id);
+
+-- ---------------------------------------------------------------------
 -- Dữ liệu cấu hình HỆ THỐNG duy nhất được seed
 -- ---------------------------------------------------------------------
 INSERT INTO roles (name) VALUES ('USER'), ('ADMIN')
     ON CONFLICT (name) DO NOTHING;
 
 -- KHÔNG insert users / categories / products / orders / order_items / payments.
+
