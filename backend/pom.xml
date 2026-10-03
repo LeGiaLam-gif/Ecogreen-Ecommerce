@@ -51,6 +51,11 @@
 			<artifactId>spring-security-crypto</artifactId>
 		</dependency>
 		<dependency>
+			<!-- B01-F1: jakarta.validation + Hibernate Validator for request DTO validation. -->
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-validation</artifactId>
+		</dependency>
+		<dependency>
 			<!-- B01-P1: verifies Google ID tokens (signature, iss, aud, exp) via GoogleIdTokenVerifier. -->
 			<groupId>com.google.api-client</groupId>
 			<artifactId>google-api-client</artifactId>

@@ -1,0 +1,1070 @@
+diff --git a/backend/pom.xml b/backend/pom.xml
+index 6081afc..de823ef 100644
+--- a/backend/pom.xml
++++ b/backend/pom.xml
+@@ -50,6 +50,11 @@
+ 			<groupId>org.springframework.security</groupId>
+ 			<artifactId>spring-security-crypto</artifactId>
+ 		</dependency>
++		<dependency>
++			<!-- B01-F1: jakarta.validation + Hibernate Validator for request DTO validation. -->
++			<groupId>org.springframework.boot</groupId>
++			<artifactId>spring-boot-starter-validation</artifactId>
++		</dependency>
+ 		<dependency>
+ 			<!-- B01-P1: verifies Google ID tokens (signature, iss, aud, exp) via GoogleIdTokenVerifier. -->
+ 			<groupId>com.google.api-client</groupId>
+diff --git a/backend/src/main/java/com/example/backend/api/ApiError.java b/backend/src/main/java/com/example/backend/api/ApiError.java
+new file mode 100644
+index 0000000..dd9523e
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/api/ApiError.java
+@@ -0,0 +1,19 @@
++package com.example.backend.api;
++
++import java.util.Map;
++
++/** Error envelope: {@code {"error": {"code": ..., "message": ..., "fields": {...}}}}. */
++public record ApiError(ApiErrorBody error) {
++
++    public static ApiError of(ApiErrorCode code, String message) {
++        return new ApiError(new ApiErrorBody(code, message, null, null));
++    }
++
++    public static ApiError of(ApiErrorCode code, String message, Map<String, String> fields) {
++        return new ApiError(new ApiErrorBody(code, message, fields, null));
++    }
++
++    public static ApiError internal(String message, String traceId) {
++        return new ApiError(new ApiErrorBody(ApiErrorCode.INTERNAL_ERROR, message, null, traceId));
++    }
++}
+diff --git a/backend/src/main/java/com/example/backend/api/ApiErrorBody.java b/backend/src/main/java/com/example/backend/api/ApiErrorBody.java
+new file mode 100644
+index 0000000..44b08e7
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/api/ApiErrorBody.java
+@@ -0,0 +1,14 @@
++package com.example.backend.api;
++
++import com.fasterxml.jackson.annotation.JsonInclude;
++
++import java.util.Map;
++
++/**
++ * Inner object of the error envelope. {@code fields} is present only for validation errors,
++ * {@code traceId} only for INTERNAL_ERROR (correlates the response with the server log).
++ * Never carries exception text, SQL, stack traces, class names, passwords or tokens.
++ */
++@JsonInclude(JsonInclude.Include.NON_NULL)
++public record ApiErrorBody(ApiErrorCode code, String message, Map<String, String> fields, String traceId) {
++}
+diff --git a/backend/src/main/java/com/example/backend/api/ApiErrorCode.java b/backend/src/main/java/com/example/backend/api/ApiErrorCode.java
+new file mode 100644
+index 0000000..dcd7594
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/api/ApiErrorCode.java
+@@ -0,0 +1,25 @@
++package com.example.backend.api;
++
++import org.springframework.http.HttpStatus;
++
++/** The closed set of error codes of the project-wide API contract (V2 Section 1.6). */
++public enum ApiErrorCode {
++    VALIDATION_ERROR(HttpStatus.BAD_REQUEST),
++    BUSINESS_RULE_VIOLATION(HttpStatus.BAD_REQUEST),
++    UNAUTHENTICATED(HttpStatus.UNAUTHORIZED),
++    FORBIDDEN(HttpStatus.FORBIDDEN),
++    NOT_FOUND(HttpStatus.NOT_FOUND),
++    CONFLICT(HttpStatus.CONFLICT),
++    RATE_LIMITED(HttpStatus.TOO_MANY_REQUESTS),
++    INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR);
++
++    private final HttpStatus status;
++
++    ApiErrorCode(HttpStatus status) {
++        this.status = status;
++    }
++
++    public HttpStatus httpStatus() {
++        return status;
++    }
++}
+diff --git a/backend/src/main/java/com/example/backend/api/ApiPaging.java b/backend/src/main/java/com/example/backend/api/ApiPaging.java
+new file mode 100644
+index 0000000..acbf4b0
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/api/ApiPaging.java
+@@ -0,0 +1,71 @@
++package com.example.backend.api;
++
++import com.example.backend.exception.BadRequestException;
++import org.springframework.data.domain.PageRequest;
++import org.springframework.data.domain.Pageable;
++import org.springframework.data.domain.Sort;
++
++import java.util.Map;
++
++/**
++ * Builds a safe {@link Pageable} from raw client query parameters.
++ * <ul>
++ *   <li>{@code page}: 0-based; null or negative becomes 0.</li>
++ *   <li>{@code size}: null or &lt; 1 becomes {@link #DEFAULT_SIZE}; anything above {@link #MAX_SIZE} is clamped
++ *       to {@link #MAX_SIZE} (server-side, so {@code size=1000} never reaches the database).</li>
++ *   <li>{@code sort}: {@code field} or {@code field,asc|desc}. The client field is looked up in a server-side
++ *       whitelist and only the mapped property name is ever used; unknown fields are rejected, so client text
++ *       never reaches SQL/JPQL.</li>
++ * </ul>
++ */
++public final class ApiPaging {
++
++    public static final int DEFAULT_SIZE = 20;
++    public static final int MAX_SIZE = 100;
++
++    private ApiPaging() {
++    }
++
++    /**
++     * @param allowedSortFields API field name -> entity property name (the whitelist)
++     * @param defaultSort       used when {@code sort} is absent/blank; must itself use trusted property names
++     * @throws BadRequestException (VALIDATION_ERROR on /api/v1) when {@code sort} is not allowed
++     */
++    public static Pageable of(Integer page, Integer size, String sort,
++                              Map<String, String> allowedSortFields, Sort defaultSort) {
++        return of(page, size, sort, allowedSortFields, defaultSort, DEFAULT_SIZE);
++    }
++
++    /** Same as above with a module-specific default size (still clamped to {@link #MAX_SIZE}). */
++    public static Pageable of(Integer page, Integer size, String sort,
++                              Map<String, String> allowedSortFields, Sort defaultSort, int defaultSize) {
++        int safePage = (page == null || page < 0) ? 0 : page;
++        int fallback = Math.min(Math.max(defaultSize, 1), MAX_SIZE);
++        int safeSize = (size == null || size < 1) ? fallback : Math.min(size, MAX_SIZE);
++        return PageRequest.of(safePage, safeSize, parseSort(sort, allowedSortFields, defaultSort));
++    }
++
++    public static Sort parseSort(String sort, Map<String, String> allowedSortFields, Sort defaultSort) {
++        if (sort == null || sort.isBlank()) {
++            return defaultSort == null ? Sort.unsorted() : defaultSort;
++        }
++        String[] parts = sort.split(",", -1);
++        if (parts.length > 2) {
++            throw new BadRequestException("Tham số sort không hợp lệ.");
++        }
++        String property = allowedSortFields == null ? null : allowedSortFields.get(parts[0].trim());
++        if (property == null) {
++            throw new BadRequestException("Trường sắp xếp không được hỗ trợ.");
++        }
++        Sort.Direction direction = Sort.Direction.ASC;
++        if (parts.length == 2) {
++            String dir = parts[1].trim();
++            if (dir.equalsIgnoreCase("desc")) {
++                direction = Sort.Direction.DESC;
++            } else if (!dir.equalsIgnoreCase("asc")) {
++                throw new BadRequestException("Hướng sắp xếp phải là asc hoặc desc.");
++            }
++        }
++        return Sort.by(direction, property);
++    }
++}
+diff --git a/backend/src/main/java/com/example/backend/api/ApiResponse.java b/backend/src/main/java/com/example/backend/api/ApiResponse.java
+new file mode 100644
+index 0000000..43cd84a
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/api/ApiResponse.java
+@@ -0,0 +1,17 @@
++package com.example.backend.api;
++
++/**
++ * Success envelope: {@code {"data": ..., "meta": ...}}.
++ * {@code meta} is {@code null} for single resources and a {@link PageMeta} for paged lists.
++ */
++public record ApiResponse<T>(T data, PageMeta meta) {
++
++    /** Single resource (or non-paged value): {@code {"data": value, "meta": null}}. */
++    public static <T> ApiResponse<T> of(T data) {
++        return new ApiResponse<>(data, null);
++    }
++
++    public static <T> ApiResponse<T> of(T data, PageMeta meta) {
++        return new ApiResponse<>(data, meta);
++    }
++}
+diff --git a/backend/src/main/java/com/example/backend/api/PageMeta.java b/backend/src/main/java/com/example/backend/api/PageMeta.java
+new file mode 100644
+index 0000000..95efb26
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/api/PageMeta.java
+@@ -0,0 +1,5 @@
++package com.example.backend.api;
++
++/** Pagination metadata. {@code page} is 0-based. */
++public record PageMeta(int page, int size, long totalElements, int totalPages) {
++}
+diff --git a/backend/src/main/java/com/example/backend/api/PageResponse.java b/backend/src/main/java/com/example/backend/api/PageResponse.java
+new file mode 100644
+index 0000000..a0ced27
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/api/PageResponse.java
+@@ -0,0 +1,30 @@
++package com.example.backend.api;
++
++import org.springframework.data.domain.Page;
++
++import java.util.List;
++import java.util.function.Function;
++
++/**
++ * Converts a Spring Data {@link Page} into the contract envelope {@code {data: [...], meta: {...}}}.
++ * Reads only values the {@code Page} already holds (no extra query, no second count).
++ */
++public final class PageResponse {
++
++    private PageResponse() {
++    }
++
++    public static <T> ApiResponse<List<T>> of(Page<T> page) {
++        return ApiResponse.of(page.getContent(), metaOf(page));
++    }
++
++    /** Maps entities to DTOs while keeping the page metadata, e.g. {@code PageResponse.of(page, ProductDto::from)}. */
++    public static <S, T> ApiResponse<List<T>> of(Page<S> page, Function<? super S, ? extends T> mapper) {
++        List<T> items = page.getContent().stream().<T>map(mapper).toList();
++        return ApiResponse.of(items, metaOf(page));
++    }
++
++    public static PageMeta metaOf(Page<?> page) {
++        return new PageMeta(page.getNumber(), page.getSize(), page.getTotalElements(), page.getTotalPages());
++    }
++}
+diff --git a/backend/src/main/java/com/example/backend/exception/BusinessRuleViolationException.java b/backend/src/main/java/com/example/backend/exception/BusinessRuleViolationException.java
+new file mode 100644
+index 0000000..c080ea0
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/exception/BusinessRuleViolationException.java
+@@ -0,0 +1,9 @@
++package com.example.backend.exception;
++
++/**
++ * A request is well-formed but violates a business rule (e.g. cannot cancel a delivered order).
++ * 400 {@code BUSINESS_RULE_VIOLATION} on /api/v1; plain 400 {@code {message}} on legacy paths.
++ */
++public class BusinessRuleViolationException extends RuntimeException {
++    public BusinessRuleViolationException(String message) { super(message); }
++}
+diff --git a/backend/src/main/java/com/example/backend/exception/GlobalExceptionHandler.java b/backend/src/main/java/com/example/backend/exception/GlobalExceptionHandler.java
+index d1de4c1..c879002 100644
+--- a/backend/src/main/java/com/example/backend/exception/GlobalExceptionHandler.java
++++ b/backend/src/main/java/com/example/backend/exception/GlobalExceptionHandler.java
+@@ -1,58 +1,237 @@
+ package com.example.backend.exception;
+ 
++import com.example.backend.api.ApiError;
++import com.example.backend.api.ApiErrorCode;
++import jakarta.servlet.http.HttpServletRequest;
++import jakarta.validation.ConstraintViolation;
++import jakarta.validation.ConstraintViolationException;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++import org.springframework.context.MessageSourceResolvable;
+ import org.springframework.http.HttpStatus;
+ import org.springframework.http.ResponseEntity;
++import org.springframework.http.converter.HttpMessageNotReadableException;
++import org.springframework.validation.FieldError;
++import org.springframework.validation.ObjectError;
++import org.springframework.validation.method.ParameterErrors;
++import org.springframework.validation.method.ParameterValidationResult;
++import org.springframework.web.bind.MethodArgumentNotValidException;
++import org.springframework.web.bind.MissingServletRequestParameterException;
+ import org.springframework.web.bind.annotation.ControllerAdvice;
+ import org.springframework.web.bind.annotation.ExceptionHandler;
++import org.springframework.web.method.annotation.HandlerMethodValidationException;
++import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+ 
+ import java.util.HashMap;
++import java.util.LinkedHashMap;
++import java.util.Locale;
+ import java.util.Map;
++import java.util.UUID;
+ 
+ /**
+- * Central mapping from exceptions to HTTP status codes, so the API never
+- * returns 200 for a failure and never leaks raw internal exception details.
++ * Central mapping from exceptions to HTTP responses (owner: B01-F1).
++ *
++ * <ul>
++ *   <li>Requests under {@code /api/v1/**} get the contract error shape
++ *       {@code {"error": {"code", "message", "fields"?, "traceId"?}}}.</li>
++ *   <li>Legacy {@code /api/**} requests keep {@code {"message": ...}} and today's status codes.</li>
++ *   <li>Unknown exceptions never leak their text: 500 with a generic message on every path; the real exception is
++ *       logged server-side together with a random trace id (returned to the client as {@code error.traceId}
++ *       on /api/v1 only).</li>
++ * </ul>
++ * Messages of the application exceptions (NotFound/BadRequest/...) are written by our own services for end users
++ * and are passed through unchanged. Validation errors carry only constraint messages, never rejected values.
+  */
+ @ControllerAdvice
+ public class GlobalExceptionHandler {
+ 
+-    private ResponseEntity<Map<String, String>> body(HttpStatus status, String message) {
++    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
++
++    static final String GENERIC_ERROR = "Đã xảy ra lỗi hệ thống. Vui lòng thử lại sau.";
++    static final String INVALID_REQUEST = "Dữ liệu gửi lên không hợp lệ.";
++    static final String VALIDATION_FAILED = "Dữ liệu không hợp lệ. Vui lòng kiểm tra lại các trường được nêu.";
++    static final String INVALID_FIELD = "Giá trị không hợp lệ.";
++
++    private static final String V1_PREFIX = "/api/v1";
++
++    // ── helpers ──────────────────────────────────────────────────────────────
++
++    /** True for /api/v1 and /api/v1/** (context path stripped). */
++    static boolean isV1(HttpServletRequest request) {
++        String uri = request.getRequestURI();
++        if (uri == null) return false;
++        String contextPath = request.getContextPath();
++        String path = (contextPath != null && !contextPath.isEmpty() && uri.startsWith(contextPath))
++                ? uri.substring(contextPath.length())
++                : uri;
++        return path.equals(V1_PREFIX) || path.startsWith(V1_PREFIX + "/");
++    }
++
++    private ResponseEntity<Object> legacy(HttpStatus status, String message) {
+         Map<String, String> response = new HashMap<>();
+         response.put("message", message);
+         return new ResponseEntity<>(response, status);
+     }
+ 
++    /** Contract error on /api/v1, {@code {message}} on legacy paths; status comes from the code on /api/v1. */
++    private ResponseEntity<Object> respond(HttpServletRequest request, HttpStatus legacyStatus,
++                                           ApiErrorCode code, String message) {
++        if (isV1(request)) {
++            return ResponseEntity.status(code.httpStatus()).body(ApiError.of(code, message));
++        }
++        return legacy(legacyStatus, message);
++    }
++
++    private ResponseEntity<Object> validation(HttpServletRequest request, Map<String, String> fields) {
++        if (isV1(request)) {
++            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
++                    .body(ApiError.of(ApiErrorCode.VALIDATION_ERROR, VALIDATION_FAILED, fields));
++        }
++        return legacy(HttpStatus.BAD_REQUEST, INVALID_REQUEST);
++    }
++
++    /** Logs the real exception server-side (never the request body/query) and returns a generic 500. */
++    private ResponseEntity<Object> internalError(HttpServletRequest request, Throwable ex) {
++        String traceId = UUID.randomUUID().toString();
++        log.error("Unhandled exception traceId={} method={} path={}",
++                traceId, request.getMethod(), request.getRequestURI(), ex);
++        if (isV1(request)) {
++            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
++                    .body(ApiError.internal(GENERIC_ERROR, traceId));
++        }
++        return legacy(HttpStatus.INTERNAL_SERVER_ERROR, GENERIC_ERROR);
++    }
++
++    /** Never let a secret-looking field name carry a (possibly value-interpolated) message. */
++    private static String safeFieldMessage(String field, String message) {
++        String f = field == null ? "" : field.toLowerCase(Locale.ROOT);
++        if (f.contains("password") || f.contains("token") || f.contains("secret") || f.contains("credential")
++                || message == null || message.isBlank()) {
++            return INVALID_FIELD;
++        }
++        return message;
++    }
++
++    private static void putField(Map<String, String> fields, String field, String message) {
++        String name = (field == null || field.isBlank()) ? "_global" : field;
++        fields.putIfAbsent(name, safeFieldMessage(name, message));
++    }
++
++    // ── application exceptions (existing classes, unchanged messages) ────────
++
+     @ExceptionHandler(ResourceNotFoundException.class)
+-    public ResponseEntity<Map<String, String>> handleNotFound(ResourceNotFoundException ex) {
+-        return body(HttpStatus.NOT_FOUND, ex.getMessage());
++    public ResponseEntity<Object> handleNotFound(ResourceNotFoundException ex, HttpServletRequest request) {
++        return respond(request, HttpStatus.NOT_FOUND, ApiErrorCode.NOT_FOUND, ex.getMessage());
+     }
+ 
++    /** On /api/v1 a BadRequestException is a VALIDATION_ERROR (V2); legacy stays 400 {message}. */
+     @ExceptionHandler(BadRequestException.class)
+-    public ResponseEntity<Map<String, String>> handleBadRequest(BadRequestException ex) {
+-        return body(HttpStatus.BAD_REQUEST, ex.getMessage());
++    public ResponseEntity<Object> handleBadRequest(BadRequestException ex, HttpServletRequest request) {
++        return respond(request, HttpStatus.BAD_REQUEST, ApiErrorCode.VALIDATION_ERROR, ex.getMessage());
++    }
++
++    @ExceptionHandler(BusinessRuleViolationException.class)
++    public ResponseEntity<Object> handleBusinessRule(BusinessRuleViolationException ex, HttpServletRequest request) {
++        return respond(request, HttpStatus.BAD_REQUEST, ApiErrorCode.BUSINESS_RULE_VIOLATION, ex.getMessage());
+     }
+ 
+     @ExceptionHandler(UnauthorizedException.class)
+-    public ResponseEntity<Map<String, String>> handleUnauthorized(UnauthorizedException ex) {
+-        return body(HttpStatus.UNAUTHORIZED, ex.getMessage());
++    public ResponseEntity<Object> handleUnauthorized(UnauthorizedException ex, HttpServletRequest request) {
++        return respond(request, HttpStatus.UNAUTHORIZED, ApiErrorCode.UNAUTHENTICATED, ex.getMessage());
+     }
+ 
+     @ExceptionHandler(ForbiddenException.class)
+-    public ResponseEntity<Map<String, String>> handleForbidden(ForbiddenException ex) {
+-        return body(HttpStatus.FORBIDDEN, ex.getMessage());
++    public ResponseEntity<Object> handleForbidden(ForbiddenException ex, HttpServletRequest request) {
++        return respond(request, HttpStatus.FORBIDDEN, ApiErrorCode.FORBIDDEN, ex.getMessage());
+     }
+ 
+     @ExceptionHandler(ConflictException.class)
+-    public ResponseEntity<Map<String, String>> handleConflict(ConflictException ex) {
+-        return body(HttpStatus.CONFLICT, ex.getMessage());
++    public ResponseEntity<Object> handleConflict(ConflictException ex, HttpServletRequest request) {
++        return respond(request, HttpStatus.CONFLICT, ApiErrorCode.CONFLICT, ex.getMessage());
++    }
++
++    // ── validation / malformed input (message text of the framework is NEVER returned) ──
++
++    @ExceptionHandler(MethodArgumentNotValidException.class)
++    public ResponseEntity<Object> handleMethodArgumentNotValid(MethodArgumentNotValidException ex,
++                                                               HttpServletRequest request) {
++        Map<String, String> fields = new LinkedHashMap<>();
++        for (FieldError fe : ex.getBindingResult().getFieldErrors()) {
++            putField(fields, fe.getField(), fe.getDefaultMessage()); // never fe.getRejectedValue()
++        }
++        for (ObjectError oe : ex.getBindingResult().getGlobalErrors()) {
++            putField(fields, oe.getObjectName(), oe.getDefaultMessage());
++        }
++        return validation(request, fields);
++    }
++
++    /** Spring 6.1+: constraint annotations directly on controller parameters (e.g. {@code @Min} on a request param). */
++    @ExceptionHandler(HandlerMethodValidationException.class)
++    public ResponseEntity<Object> handleHandlerMethodValidation(HandlerMethodValidationException ex,
++                                                                HttpServletRequest request) {
++        Map<String, String> fields = new LinkedHashMap<>();
++        for (ParameterValidationResult result : ex.getParameterValidationResults()) {
++            if (result instanceof ParameterErrors errors) {
++                for (FieldError fe : errors.getFieldErrors()) {
++                    putField(fields, fe.getField(), fe.getDefaultMessage());
++                }
++            } else {
++                String name = result.getMethodParameter().getParameterName();
++                for (MessageSourceResolvable error : result.getResolvableErrors()) {
++                    putField(fields, name, error.getDefaultMessage());
++                }
++            }
++        }
++        return validation(request, fields);
++    }
++
++    @ExceptionHandler(ConstraintViolationException.class)
++    public ResponseEntity<Object> handleConstraintViolation(ConstraintViolationException ex,
++                                                            HttpServletRequest request) {
++        Map<String, String> fields = new LinkedHashMap<>();
++        for (ConstraintViolation<?> v : ex.getConstraintViolations()) {
++            String path = String.valueOf(v.getPropertyPath());
++            String name = path.substring(path.lastIndexOf('.') + 1); // "create.request.name" -> "name"
++            putField(fields, name, v.getMessage()); // never v.getInvalidValue()
++        }
++        return validation(request, fields);
++    }
++
++    @ExceptionHandler(HttpMessageNotReadableException.class)
++    public ResponseEntity<Object> handleNotReadable(HttpMessageNotReadableException ex, HttpServletRequest request) {
++        // Jackson's message can contain class names / raw input: not returned.
++        return respond(request, HttpStatus.BAD_REQUEST, ApiErrorCode.VALIDATION_ERROR,
++                "Nội dung yêu cầu bị thiếu hoặc không đúng định dạng.");
++    }
++
++    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
++    public ResponseEntity<Object> handleTypeMismatch(MethodArgumentTypeMismatchException ex,
++                                                     HttpServletRequest request) {
++        Map<String, String> fields = new LinkedHashMap<>();
++        putField(fields, ex.getName(), INVALID_FIELD); // do not echo ex.getValue()
++        return validation(request, fields);
++    }
++
++    @ExceptionHandler(MissingServletRequestParameterException.class)
++    public ResponseEntity<Object> handleMissingParameter(MissingServletRequestParameterException ex,
++                                                         HttpServletRequest request) {
++        if (!isV1(request)) {
++            return internalError(request, ex); // legacy: unchanged status (500), now without leaking text
++        }
++        Map<String, String> fields = new LinkedHashMap<>();
++        putField(fields, ex.getParameterName(), "Tham số bắt buộc.");
++        return validation(request, fields);
+     }
+ 
++    // ── catch-alls: never expose exception text ──────────────────────────────
++
+     @ExceptionHandler(RuntimeException.class)
+-    public ResponseEntity<Map<String, String>> handleRuntimeException(RuntimeException ex) {
+-        return body(HttpStatus.BAD_REQUEST, ex.getMessage());
++    public ResponseEntity<Object> handleRuntimeException(RuntimeException ex, HttpServletRequest request) {
++        return internalError(request, ex);
+     }
+ 
+     @ExceptionHandler(Exception.class)
+-    public ResponseEntity<Map<String, String>> handleGeneralException(Exception ex) {
+-        return body(HttpStatus.INTERNAL_SERVER_ERROR, "Đã xảy ra lỗi hệ thống. Vui lòng thử lại sau.");
++    public ResponseEntity<Object> handleGeneralException(Exception ex, HttpServletRequest request) {
++        return internalError(request, ex);
+     }
+ }
+diff --git a/backend/src/test/java/com/example/backend/api/ApiPagingTest.java b/backend/src/test/java/com/example/backend/api/ApiPagingTest.java
+new file mode 100644
+index 0000000..5a22a94
+--- /dev/null
++++ b/backend/src/test/java/com/example/backend/api/ApiPagingTest.java
+@@ -0,0 +1,96 @@
++package com.example.backend.api;
++
++import com.example.backend.exception.BadRequestException;
++import org.junit.jupiter.api.Test;
++import org.springframework.data.domain.Page;
++import org.springframework.data.domain.PageImpl;
++import org.springframework.data.domain.PageRequest;
++import org.springframework.data.domain.Pageable;
++import org.springframework.data.domain.Sort;
++
++import java.util.List;
++import java.util.Map;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertNull;
++import static org.junit.jupiter.api.Assertions.assertThrows;
++
++class ApiPagingTest {
++
++    private static final Map<String, String> WHITELIST = Map.of("price", "price", "created", "createdAt");
++    private static final Sort DEFAULT_SORT = Sort.by(Sort.Direction.DESC, "createdAt");
++
++    @Test
++    void sizeAbove100_isClampedTo100() {
++        assertEquals(100, ApiPaging.of(0, 1000, null, WHITELIST, DEFAULT_SORT).getPageSize());
++        assertEquals(100, ApiPaging.of(0, 101, null, WHITELIST, DEFAULT_SORT).getPageSize());
++    }
++
++    @Test
++    void missingOrNonPositiveSize_usesDefault20_andNegativePageBecomesZero() {
++        Pageable p = ApiPaging.of(-5, null, null, WHITELIST, DEFAULT_SORT);
++        assertEquals(0, p.getPageNumber());
++        assertEquals(20, p.getPageSize());
++        assertEquals(20, ApiPaging.of(0, 0, null, WHITELIST, DEFAULT_SORT).getPageSize());
++    }
++
++    @Test
++    void moduleDefaultSize_isUsedButStillClamped() {
++        assertEquals(12, ApiPaging.of(0, null, null, WHITELIST, DEFAULT_SORT, 12).getPageSize());
++        assertEquals(100, ApiPaging.of(0, null, null, WHITELIST, DEFAULT_SORT, 500).getPageSize());
++    }
++
++    @Test
++    void sort_usesOnlyMappedPropertyNames() {
++        Sort sort = ApiPaging.of(0, 10, "created,asc", WHITELIST, DEFAULT_SORT).getSort();
++        assertEquals(Sort.Direction.ASC, sort.getOrderFor("createdAt").getDirection()); // API "created" -> property
++        assertNull(sort.getOrderFor("created"));
++        assertEquals(Sort.Direction.DESC, ApiPaging.parseSort("price,DESC", WHITELIST, DEFAULT_SORT)
++                .getOrderFor("price").getDirection());
++        assertEquals(Sort.Direction.ASC, ApiPaging.parseSort("price", WHITELIST, DEFAULT_SORT)
++                .getOrderFor("price").getDirection());
++    }
++
++    @Test
++    void absentSort_usesDefaultSort() {
++        assertEquals(DEFAULT_SORT, ApiPaging.parseSort(null, WHITELIST, DEFAULT_SORT));
++        assertEquals(DEFAULT_SORT, ApiPaging.parseSort("  ", WHITELIST, DEFAULT_SORT));
++    }
++
++    @Test
++    void nonWhitelistedOrMalformedSort_isRejected() {
++        assertThrows(BadRequestException.class, () -> ApiPaging.parseSort("password", WHITELIST, DEFAULT_SORT));
++        assertThrows(BadRequestException.class, () -> ApiPaging.parseSort("price;drop table x", WHITELIST, DEFAULT_SORT));
++        assertThrows(BadRequestException.class, () -> ApiPaging.parseSort("price,asc,name", WHITELIST, DEFAULT_SORT));
++        assertThrows(BadRequestException.class, () -> ApiPaging.parseSort("price,up", WHITELIST, DEFAULT_SORT));
++        assertThrows(BadRequestException.class, () -> ApiPaging.parseSort("price", null, DEFAULT_SORT));
++    }
++
++    @Test
++    void pageResponse_convertsPageWithoutExtraCount() {
++        Pageable pageable = PageRequest.of(1, 2);
++        Page<String> page = new PageImpl<>(List.of("c", "d"), pageable, 5);
++
++        ApiResponse<List<String>> response = PageResponse.of(page);
++
++        assertEquals(List.of("c", "d"), response.data());
++        assertEquals(new PageMeta(1, 2, 5, 3), response.meta());
++    }
++
++    @Test
++    void pageResponse_mapsContentKeepingMeta() {
++        Page<Integer> page = new PageImpl<>(List.of(1, 2, 3), PageRequest.of(0, 3), 3);
++
++        ApiResponse<List<String>> response = PageResponse.of(page, n -> "n" + n);
++
++        assertEquals(List.of("n1", "n2", "n3"), response.data());
++        assertEquals(new PageMeta(0, 3, 3, 1), response.meta());
++    }
++
++    @Test
++    void singleResource_hasNullMeta() {
++        ApiResponse<String> response = ApiResponse.of("x");
++        assertEquals("x", response.data());
++        assertNull(response.meta());
++    }
++}
+diff --git a/backend/src/test/java/com/example/backend/exception/GlobalExceptionHandlerTest.java b/backend/src/test/java/com/example/backend/exception/GlobalExceptionHandlerTest.java
+new file mode 100644
+index 0000000..002af56
+--- /dev/null
++++ b/backend/src/test/java/com/example/backend/exception/GlobalExceptionHandlerTest.java
+@@ -0,0 +1,264 @@
++package com.example.backend.exception;
++
++import com.example.backend.api.ApiPaging;
++import com.example.backend.api.ApiResponse;
++import com.example.backend.api.PageResponse;
++import jakarta.validation.Valid;
++import jakarta.validation.constraints.NotBlank;
++import jakarta.validation.constraints.Size;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++import org.springframework.data.domain.Page;
++import org.springframework.data.domain.PageImpl;
++import org.springframework.data.domain.Pageable;
++import org.springframework.data.domain.Sort;
++import org.springframework.http.MediaType;
++import org.springframework.test.web.servlet.MockMvc;
++import org.springframework.test.web.servlet.MvcResult;
++import org.springframework.test.web.servlet.setup.MockMvcBuilders;
++import org.springframework.web.bind.annotation.GetMapping;
++import org.springframework.web.bind.annotation.PostMapping;
++import org.springframework.web.bind.annotation.RequestBody;
++import org.springframework.web.bind.annotation.RequestParam;
++import org.springframework.web.bind.annotation.RestController;
++
++import java.util.List;
++import java.util.Map;
++
++import static org.junit.jupiter.api.Assertions.assertFalse;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
++import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
++import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
++import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
++
++/**
++ * B01-F1: GlobalExceptionHandler contract, tested with standalone MockMvc (no Spring context, no database).
++ * The test controller below doubles as the documented example of a /api/v1 endpoint.
++ */
++class GlobalExceptionHandlerTest {
++
++    private static final String SECRET_TEXT = "secret-internal-detail jdbc:postgresql://db:5432/ecogreen";
++
++    static class CreateItemRequest {
++        @NotBlank(message = "must not be blank")
++        public String name;
++
++        @Size(min = 8, message = "must be at least 8 characters")
++        public String password;
++    }
++
++    @RestController
++    static class ExampleController {
++
++        @PostMapping("/api/v1/test/items")
++        public ApiResponse<String> create(@Valid @RequestBody CreateItemRequest request) {
++            return ApiResponse.of("created");
++        }
++
++        @GetMapping("/api/v1/test/boom")
++        public String boomV1() {
++            throw new IllegalStateException(SECRET_TEXT);
++        }
++
++        @GetMapping("/api/test/boom")
++        public String boomLegacy() {
++            throw new IllegalStateException(SECRET_TEXT);
++        }
++
++        @GetMapping("/api/test/not-found")
++        public String notFoundLegacy() {
++            throw new ResourceNotFoundException("Không tìm thấy sản phẩm.");
++        }
++
++        @GetMapping("/api/v1/test/not-found")
++        public String notFoundV1() {
++            throw new ResourceNotFoundException("Không tìm thấy sản phẩm.");
++        }
++
++        @GetMapping("/api/test/bad-request")
++        public String badRequestLegacy() {
++            throw new BadRequestException("Số lượng không hợp lệ.");
++        }
++
++        @GetMapping("/api/v1/test/bad-request")
++        public String badRequestV1() {
++            throw new BadRequestException("Số lượng không hợp lệ.");
++        }
++
++        @GetMapping("/api/v1/test/rule")
++        public String ruleV1() {
++            throw new BusinessRuleViolationException("Không thể hủy đơn đã giao.");
++        }
++
++        /** How a module returns a paged list: clamp + whitelist the params, query with Pageable, wrap with PageResponse. */
++        @GetMapping("/api/v1/test/items")
++        public ApiResponse<List<String>> list(@RequestParam(required = false) Integer page,
++                                              @RequestParam(required = false) Integer size,
++                                              @RequestParam(required = false) String sort) {
++            Pageable pageable = ApiPaging.of(page, size, sort,
++                    Map.of("createdAt", "createdAt", "price", "price"), Sort.by(Sort.Direction.DESC, "createdAt"));
++            Page<String> result = new PageImpl<>(List.of("a", "b"), pageable, 250);
++            return PageResponse.of(result);
++        }
++    }
++
++    private MockMvc mvc;
++
++    @BeforeEach
++    void setUp() {
++        mvc = MockMvcBuilders.standaloneSetup(new ExampleController())
++                .setControllerAdvice(new GlobalExceptionHandler())
++                .build();
++    }
++
++    // 1. validation failure on /api/v1/** -> 400 VALIDATION_ERROR + fields (and no echo of secrets)
++    @Test
++    void v1_validationFailure_returns400ValidationErrorWithFields_andDoesNotEchoPassword() throws Exception {
++        String body = "{\"name\":\"\",\"password\":\"hunter2\"}";
++
++        MvcResult result = mvc.perform(post("/api/v1/test/items").contentType(MediaType.APPLICATION_JSON).content(body))
++                .andExpect(status().isBadRequest())
++                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"))
++                .andExpect(jsonPath("$.error.fields.name").exists())
++                .andExpect(jsonPath("$.error.fields.password").exists())
++                .andExpect(jsonPath("$.data").doesNotExist())
++                .andReturn();
++
++        assertFalse(result.getResponse().getContentAsString().contains("hunter2"),
++                "validation response must not echo the submitted password");
++    }
++
++    // 2. unknown runtime exception on /api/v1/** -> 500 INTERNAL_ERROR, original text absent
++    @Test
++    void v1_unknownRuntimeException_returns500InternalErrorWithoutOriginalText() throws Exception {
++        MvcResult result = mvc.perform(get("/api/v1/test/boom"))
++                .andExpect(status().isInternalServerError())
++                .andExpect(jsonPath("$.error.code").value("INTERNAL_ERROR"))
++                .andExpect(jsonPath("$.error.message").value(GlobalExceptionHandler.GENERIC_ERROR))
++                .andExpect(jsonPath("$.error.traceId").exists())
++                .andReturn();
++
++        String content = result.getResponse().getContentAsString();
++        assertFalse(content.contains("secret-internal-detail"));
++        assertFalse(content.contains("jdbc:"));
++        assertFalse(content.contains("IllegalStateException"));
++        assertFalse(content.contains("java.lang"));
++    }
++
++    // 3. unknown runtime exception on legacy /api/** -> generic {message}, original text absent
++    @Test
++    void legacy_unknownRuntimeException_returnsGenericMessageWithoutOriginalText() throws Exception {
++        MvcResult result = mvc.perform(get("/api/test/boom"))
++                .andExpect(status().isInternalServerError())
++                .andExpect(jsonPath("$.message").value(GlobalExceptionHandler.GENERIC_ERROR))
++                .andExpect(jsonPath("$.error").doesNotExist())
++                .andReturn();
++
++        String content = result.getResponse().getContentAsString();
++        assertFalse(content.contains("secret-internal-detail"));
++        assertFalse(content.contains("jdbc:"));
++        assertFalse(content.contains("IllegalStateException"));
++    }
++
++    // 4. legacy ResourceNotFoundException -> 404 {message}
++    @Test
++    void legacy_resourceNotFound_returns404WithMessageShape() throws Exception {
++        mvc.perform(get("/api/test/not-found"))
++                .andExpect(status().isNotFound())
++                .andExpect(jsonPath("$.message").value("Không tìm thấy sản phẩm."))
++                .andExpect(jsonPath("$.error").doesNotExist());
++    }
++
++    @Test
++    void v1_resourceNotFound_returns404NotFoundCode() throws Exception {
++        mvc.perform(get("/api/v1/test/not-found"))
++                .andExpect(status().isNotFound())
++                .andExpect(jsonPath("$.error.code").value("NOT_FOUND"))
++                .andExpect(jsonPath("$.error.message").value("Không tìm thấy sản phẩm."))
++                .andExpect(jsonPath("$.message").doesNotExist());
++    }
++
++    @Test
++    void legacy_badRequest_keeps400MessageShape() throws Exception {
++        mvc.perform(get("/api/test/bad-request"))
++                .andExpect(status().isBadRequest())
++                .andExpect(jsonPath("$.message").value("Số lượng không hợp lệ."));
++    }
++
++    @Test
++    void v1_badRequest_isValidationError() throws Exception {
++        mvc.perform(get("/api/v1/test/bad-request"))
++                .andExpect(status().isBadRequest())
++                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
++    }
++
++    @Test
++    void v1_businessRuleViolation_returns400BusinessRuleViolation() throws Exception {
++        mvc.perform(get("/api/v1/test/rule"))
++                .andExpect(status().isBadRequest())
++                .andExpect(jsonPath("$.error.code").value("BUSINESS_RULE_VIOLATION"));
++    }
++
++    @Test
++    void v1_malformedJson_returns400ValidationErrorWithoutParserText() throws Exception {
++        MvcResult result = mvc.perform(post("/api/v1/test/items").contentType(MediaType.APPLICATION_JSON)
++                        .content("{\"name\": "))
++                .andExpect(status().isBadRequest())
++                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"))
++                .andReturn();
++
++        String content = result.getResponse().getContentAsString();
++        assertFalse(content.contains("Jackson"));
++        assertFalse(content.contains("com.example"));
++        assertFalse(content.contains("JSON parse error"));
++    }
++
++    // 5. PageResponse -> correct pagination metadata
++    @Test
++    void pageResponse_hasCorrectMeta() throws Exception {
++        mvc.perform(get("/api/v1/test/items?page=2&size=20&sort=price,asc"))
++                .andExpect(status().isOk())
++                .andExpect(jsonPath("$.data.length()").value(2))
++                .andExpect(jsonPath("$.meta.page").value(2))
++                .andExpect(jsonPath("$.meta.size").value(20))
++                .andExpect(jsonPath("$.meta.totalElements").value(250))
++                .andExpect(jsonPath("$.meta.totalPages").value(13));
++    }
++
++    // 6. size=1000 -> clamped to 100 on the server
++    @Test
++    void pageSize1000_isClampedTo100() throws Exception {
++        mvc.perform(get("/api/v1/test/items?size=1000"))
++                .andExpect(status().isOk())
++                .andExpect(jsonPath("$.meta.size").value(100))
++                .andExpect(jsonPath("$.meta.totalPages").value(3));
++    }
++
++    @Test
++    void defaultsApply_whenNoPagingParams() throws Exception {
++        mvc.perform(get("/api/v1/test/items"))
++                .andExpect(status().isOk())
++                .andExpect(jsonPath("$.meta.page").value(0))
++                .andExpect(jsonPath("$.meta.size").value(20));
++    }
++
++    @Test
++    void unknownSortField_isRejectedAsValidationError_notPassedOn() throws Exception {
++        mvc.perform(get("/api/v1/test/items").param("sort", "password;drop table users,asc"))
++                .andExpect(status().isBadRequest())
++                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
++        mvc.perform(get("/api/v1/test/items").param("sort", "price,sideways"))
++                .andExpect(status().isBadRequest())
++                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
++    }
++
++    @Test
++    void isV1_detectsOnlyApiV1Paths() {
++        var req = new org.springframework.mock.web.MockHttpServletRequest("GET", "/api/v1/products");
++        assertTrue(GlobalExceptionHandler.isV1(req));
++        assertFalse(GlobalExceptionHandler.isV1(new org.springframework.mock.web.MockHttpServletRequest("GET", "/api/products")));
++        assertFalse(GlobalExceptionHandler.isV1(new org.springframework.mock.web.MockHttpServletRequest("GET", "/api/v10/products")));
++        assertFalse(GlobalExceptionHandler.isV1(new org.springframework.mock.web.MockHttpServletRequest("GET", "/api/v1x")));
++    }
++}
+diff --git a/docs/ai/contracts/B01-api-foundation.md b/docs/ai/contracts/B01-api-foundation.md
+new file mode 100644
+index 0000000..a2adeea
+--- /dev/null
++++ b/docs/ai/contracts/B01-api-foundation.md
+@@ -0,0 +1,85 @@
++# Contract: B01-F1 — API foundation
++
++Owner: B01-F1. Permanent. Dual-mode (legacy + `/api/v1`) until the end of B12.
++Source of the rules: `docs/ai/03_AGENT_PROMPTS_V2.md` Section 1.6.
++
++## 1. Java API (`com.example.backend.api`)
++
++| Class | Purpose |
++|---|---|
++| `ApiResponse<T>(data, meta)` | success envelope; `ApiResponse.of(value)` → `meta: null`; `ApiResponse.of(list, pageMeta)` |
++| `PageMeta(page, size, totalElements, totalPages)` | `page` is 0-based |
++| `PageResponse.of(Page<T>)` / `PageResponse.of(Page<S>, Function<S,T>)` | `Page` → `{data, meta}`; reads values the `Page` already holds (no second count, no extra query) |
++| `ApiPaging.of(page, size, sort, whitelist, defaultSort[, defaultSize])` | safe `Pageable`: page ≥ 0, size default 20, **clamped to 100**, `sort` whitelisted |
++| `ApiErrorCode` | `VALIDATION_ERROR` 400, `BUSINESS_RULE_VIOLATION` 400, `UNAUTHENTICATED` 401, `FORBIDDEN` 403, `NOT_FOUND` 404, `CONFLICT` 409, `RATE_LIMITED` 429, `INTERNAL_ERROR` 500 |
++| `ApiError` / `ApiErrorBody(code, message, fields?, traceId?)` | error envelope (`fields` only for validation, `traceId` only for `INTERNAL_ERROR`; null members are omitted) |
++| `exception.BusinessRuleViolationException` | throw for "well-formed but not allowed" → `BUSINESS_RULE_VIOLATION` |
++
++## 2. Wire format (only for URLs under `/api/v1/`)
++
++```json
++// single
++{ "data": { "id": 1 }, "meta": null }
++// list
++{ "data": [ ... ], "meta": { "page": 0, "size": 20, "totalElements": 134, "totalPages": 7 } }
++// error
++{ "error": { "code": "VALIDATION_ERROR", "message": "...", "fields": { "price": "must be >= 0" } } }
++// unexpected failure
++{ "error": { "code": "INTERNAL_ERROR", "message": "Đã xảy ra lỗi hệ thống. Vui lòng thử lại sau.", "traceId": "<uuid>" } }
++```
++
++## 3. Exception → response mapping (`GlobalExceptionHandler`)
++
++| Exception | `/api/v1/**` | legacy `/api/**` (shape `{message}`) |
++|---|---|---|
++| `ResourceNotFoundException` | 404 `NOT_FOUND` | 404 |
++| `BadRequestException` | 400 `VALIDATION_ERROR` | 400 |
++| `BusinessRuleViolationException` | 400 `BUSINESS_RULE_VIOLATION` | 400 |
++| `UnauthorizedException` | 401 `UNAUTHENTICATED` | 401 |
++| `ForbiddenException` | 403 `FORBIDDEN` | 403 |
++| `ConflictException` | 409 `CONFLICT` | 409 |
++| `MethodArgumentNotValidException`, `HandlerMethodValidationException`, `ConstraintViolationException` | 400 `VALIDATION_ERROR` + `fields` | 400 generic `{message}` |
++| `HttpMessageNotReadableException` | 400 `VALIDATION_ERROR` | 400 |
++| `MethodArgumentTypeMismatchException` | 400 `VALIDATION_ERROR` + field | 400 generic |
++| `MissingServletRequestParameterException` | 400 `VALIDATION_ERROR` + field | 500 generic (unchanged status) |
++| any other `RuntimeException` / `Exception` | **500 `INTERNAL_ERROR`** + `traceId` | **500** `{message}` generic |
++
++Exception text, SQL, stack traces and class names are **never** returned; the real exception is logged server-side with the
++trace id. Validation `fields` carry constraint messages only — never rejected values; fields whose name contains
++`password`, `token`, `secret` or `credential` always get a generic message.
++
++## 4. How a module returns a paged list
++
++```java
++private static final Map<String, String> SORTS = Map.of("createdAt", "createdAt", "price", "price", "name", "name");
++
++@GetMapping("/api/v1/products")
++public ApiResponse<List<ProductDto>> list(@RequestParam(required = false) Integer page,
++                                          @RequestParam(required = false) Integer size,
++                                          @RequestParam(required = false) String sort) {   // "price,desc"
++    Pageable pageable = ApiPaging.of(page, size, sort, SORTS, Sort.by(Sort.Direction.DESC, "createdAt"), 12);
++    return PageResponse.of(productRepository.findAll(pageable), ProductDto::from);        // ONE query (+ the Page's own count)
++}
++```
++Rules: declare `sort` as a single `String` (not `List<String>`, Spring would split on the comma); never pass the raw client
++`sort` to a repository; request DTOs use `jakarta.validation` annotations with `@Valid @RequestBody`; throw the existing
++exceptions or `BusinessRuleViolationException` for business errors; return single resources with `ApiResponse.of(dto)`.
++Money stays `BigDecimal` (`DECIMAL(12,2)`), never `double`/`float`.
++
++## 5. Frontend (`frontend/src/services/http.js`)
++
++`baseURL` stays `/api`, so a v1 endpoint is called as `http.get('/v1/products')`.
++- v1 success: single → `res.data` is the plain value; paged (meta present) → `res.data = { items, meta }`; responses
++  without an envelope (e.g. 204) are untouched.
++- v1 error: rejected object keeps `friendlyMessage` and adds `code` (API code), `fields`, `traceId`; axios' own code is kept as `axiosCode`.
++- Legacy URLs: unchanged behaviour. No token refresh logic (B01-P2).
++
++## 6. Legacy behaviour changed by B01-F1 (the only one)
++
++Unknown exceptions on legacy paths no longer return their raw text. Previously every `RuntimeException` (e.g. `NumberFormatException`
++from `Long.parseLong(body.get(...))` in cart/product/return controllers, `NullPointerException` on a missing key,
++`IllegalStateException` in `ReportService`) → **400** with the exception's own text; now **500** with the generic Vietnamese
++system-error text. Known exception classes keep their statuses and messages.
++
++## 7. Requests for contract changes
++_(other modules append here)_
+diff --git a/frontend/src/services/http.js b/frontend/src/services/http.js
+index 5486568..dd8a6eb 100644
+--- a/frontend/src/services/http.js
++++ b/frontend/src/services/http.js
+@@ -5,6 +5,32 @@ export const API_BASE_URL = '/api';
+ 
+ const http = axios.create({ baseURL: API_BASE_URL });
+ 
++/**
++ * Dual-mode (B01-F1):
++ *  - URLs under /api/v1/** follow the project-wide contract: success `{data, meta}`, errors `{error:{code,message,fields}}`.
++ *  - Every other URL is a legacy /api/** endpoint and behaves exactly as before (bare JSON, `{message}` errors).
++ * Because baseURL is '/api', callers write v1 endpoints as `http.get('/v1/products')`.
++ */
++const V1_PATH = /^\/api\/v1(\/|$)/;
++
++// Resolves the absolute path of a request (baseURL + url), whatever form the caller used.
++const requestPath = (config) => {
++  if (!config) return '';
++  const url = config.url || '';
++  try {
++    if (/^https?:\/\//i.test(url)) return new URL(url).pathname;
++    const base = config.baseURL || '';
++    const joined = base ? `${base.replace(/\/+$/, '')}/${url.replace(/^\/+/, '')}` : url;
++    return new URL(joined, 'http://localhost').pathname;
++  } catch {
++    return '';
++  }
++};
++
++export const isV1Request = (config) => V1_PATH.test(requestPath(config));
++
++const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
++
+ // Attach the bearer token (if any) to every request automatically.
+ http.interceptors.request.use((config) => {
+   const token = localStorage.getItem('token');
+@@ -14,19 +40,44 @@ http.interceptors.request.use((config) => {
+   return config;
+ });
+ 
++// Success: unwrap `{data, meta}` for /api/v1 only.
++//   single resource            -> response.data = <data>
++//   paged list (meta present)  -> response.data = { items: <data>, meta }
++// Legacy responses and v1 responses without an envelope (e.g. 204) are left untouched.
++const unwrapV1 = (response) => {
++  if (!isV1Request(response.config)) return response;
++  const body = response.data;
++  if (isPlainObject(body) && Object.prototype.hasOwnProperty.call(body, 'data')) {
++    response.data = body.meta != null ? { items: body.data, meta: body.meta } : body.data;
++  }
++  return response;
++};
++
++// Failure: always produce `friendlyMessage`; for /api/v1 also expose `code`, `fields` and `traceId`.
++const normaliseError = (error) => {
++  const status = error?.response?.status;
++  const apiError = isV1Request(error?.config) ? error?.response?.data?.error : null;
++
++  const message =
++    (apiError && apiError.message) ||
++    error?.response?.data?.message ||
++    (status === 401 && 'Vui lòng đăng nhập để tiếp tục.') ||
++    (status === 403 && 'Bạn không có quyền thực hiện thao tác này.') ||
++    (error?.code === 'ERR_NETWORK' && 'Không thể kết nối đến máy chủ. Vui lòng kiểm tra lại kết nối mạng.') ||
++    'Đã xảy ra lỗi. Vui lòng thử lại sau.';
++
++  const normalised = { ...error, friendlyMessage: message };
++  if (apiError) {
++    normalised.axiosCode = error.code; // keep axios' own code (e.g. ERR_BAD_REQUEST)
++    normalised.code = apiError.code; // API error code (VALIDATION_ERROR, NOT_FOUND, ...)
++    normalised.fields = apiError.fields || null;
++    normalised.traceId = apiError.traceId || null;
++  }
++  return Promise.reject(normalised);
++};
++
+ // Centralised error normalisation so pages can show a friendly message
+ // instead of raw axios/console errors.
+-http.interceptors.response.use(
+-  (response) => response,
+-  (error) => {
+-    const message =
+-      error?.response?.data?.message ||
+-      (error?.response?.status === 401 && 'Vui lòng đăng nhập để tiếp tục.') ||
+-      (error?.response?.status === 403 && 'Bạn không có quyền thực hiện thao tác này.') ||
+-      (error?.code === 'ERR_NETWORK' && 'Không thể kết nối đến máy chủ. Vui lòng kiểm tra lại kết nối mạng.') ||
+-      'Đã xảy ra lỗi. Vui lòng thử lại sau.';
+-    return Promise.reject({ ...error, friendlyMessage: message });
+-  }
+-);
++http.interceptors.response.use(unwrapV1, normaliseError);
+ 
+ export default http;
