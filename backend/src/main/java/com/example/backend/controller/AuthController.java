@@ -4,6 +4,7 @@ import com.example.backend.dto.AuthResponse;
 import com.example.backend.dto.GoogleAuthRequest;
 import com.example.backend.dto.UserResponse;
 import com.example.backend.entity.User;
+import com.example.backend.exception.GoogleLoginUnavailableException;
 import com.example.backend.repository.UserRepository;
 import com.example.backend.service.AuthService;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -37,6 +38,12 @@ public class AuthController {
     public ResponseEntity<AuthResponse> loginWithGoogle(@RequestBody GoogleAuthRequest request) {
         AuthResponse response = authService.loginWithGoogle(request);
         return ResponseEntity.ok(response);
+    }
+
+    // Local handler (takes precedence over GlobalExceptionHandler, which is owned by B01-F1): fail closed with 503.
+    @ExceptionHandler(GoogleLoginUnavailableException.class)
+    public ResponseEntity<Map<String, String>> handleGoogleUnavailable(GoogleLoginUnavailableException ex) {
+        return ResponseEntity.status(503).body(Map.of("message", ex.getMessage()));
     }
 
     @PostMapping("/logout")

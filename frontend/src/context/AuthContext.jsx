@@ -52,10 +52,10 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const loginWithGoogle = async (googleData) => {
+  const loginWithGoogle = async (idToken) => {
     setLoading(true);
     try {
-      const data = await authApi.loginWithGoogle(googleData);
+      const data = await authApi.loginWithGoogle(idToken);
       localStorage.setItem('token', data.token);
       localStorage.setItem('user', JSON.stringify(data.user));
       setUser(data.user);

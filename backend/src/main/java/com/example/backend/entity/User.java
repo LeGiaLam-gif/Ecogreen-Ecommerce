@@ -23,6 +23,10 @@ public class User {
     @Column(nullable = false)
     private String password;
 
+    // Google account identifier ("sub" claim of a VERIFIED Google ID token). Null for password-only users.
+    @Column(name = "google_sub", length = 64)
+    private String googleSub;
+
     @Column(name = "is_active", nullable = false)
     private boolean active = true;
 
@@ -62,6 +66,9 @@ public class User {
 
     public String getPassword() { return password; }
     public void setPassword(String password) { this.password = password; }
+
+    public String getGoogleSub() { return googleSub; }
+    public void setGoogleSub(String googleSub) { this.googleSub = googleSub; }
 
     public boolean isActive() { return active; }
     public void setActive(boolean active) { this.active = active; }

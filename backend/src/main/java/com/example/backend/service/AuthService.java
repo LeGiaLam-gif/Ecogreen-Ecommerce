@@ -7,30 +7,32 @@ import com.example.backend.entity.Role;
 import com.example.backend.entity.User;
 import com.example.backend.exception.BadRequestException;
 import com.example.backend.exception.ConflictException;
+import com.example.backend.exception.GoogleLoginUnavailableException;
 import com.example.backend.exception.UnauthorizedException;
 import com.example.backend.repository.RoleRepository;
 import com.example.backend.repository.UserRepository;
 import com.example.backend.security.AuthTokenStore;
+import com.example.backend.security.GoogleIdentity;
+import com.example.backend.security.GoogleIdentityVerifier;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.nio.charset.StandardCharsets;
-import java.util.Base64;
 import java.util.HashSet;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 @Service
 public class AuthService {
+
+    private static final String GOOGLE_AUTH_FAILED = "Xác thực Google không thành công.";
 
     @Autowired private UserRepository userRepository;
     @Autowired private RoleRepository roleRepository;
     @Autowired private PasswordHasher passwordHasher;
     @Autowired private AuthTokenStore tokenStore;
     @Autowired private CartService cartService;
+    @Autowired private GoogleIdentityVerifier googleVerifier;
 
     @Transactional
     public User register(String username, String email, String password) {
@@ -74,99 +76,77 @@ public class AuthService {
     }
 
     /**
-     * Google OAuth 2.0 Single Sign-On:
-     * - Decodes Google JWT ID Token if present.
-     * - Finds existing user by email or auto-creates new account.
-     * - Ensures Cart 1-1 is created.
-     * - Issues secure bearer session token.
+     * Google Sign-In (ID-token flow). The ONLY client input is the ID token; email/name/sub come from the
+     * cryptographically verified token payload. Matching: google_sub first, then verified email (linking
+     * google_sub). A different existing google_sub is rejected. Fails closed when Google login is not configured.
      */
     @Transactional
     public AuthResponse loginWithGoogle(GoogleAuthRequest request) {
-        if (request == null) {
-            throw new BadRequestException("Dữ liệu xác thực Google không hợp lệ.");
+        String idToken = request == null ? null : request.getIdToken();
+        if (idToken == null || idToken.isBlank()) {
+            throw new UnauthorizedException(GOOGLE_AUTH_FAILED);
+        }
+        if (!googleVerifier.isConfigured()) {
+            throw new GoogleLoginUnavailableException("Đăng nhập bằng Google hiện chưa được cấu hình.");
         }
 
-        // Try decoding JWT credential if supplied by Google Identity Services
-        if (request.getCredential() != null && !request.getCredential().isBlank()) {
-            try {
-                String[] parts = request.getCredential().split("\\.");
-                if (parts.length >= 2) {
-                    byte[] decoded = Base64.getUrlDecoder().decode(parts[1]);
-                    String json = new String(decoded, StandardCharsets.UTF_8);
-
-                    String jwtEmail = extractJsonField(json, "email");
-                    String jwtName = extractJsonField(json, "name");
-                    String jwtSub = extractJsonField(json, "sub");
-                    String jwtPicture = extractJsonField(json, "picture");
-
-                    if (jwtEmail != null && !jwtEmail.isBlank() && (request.getEmail() == null || request.getEmail().isBlank())) {
-                        request.setEmail(jwtEmail);
-                    }
-                    if (jwtName != null && !jwtName.isBlank() && (request.getName() == null || request.getName().isBlank())) {
-                        request.setName(jwtName);
-                    }
-                    if (jwtSub != null && !jwtSub.isBlank() && (request.getGoogleId() == null || request.getGoogleId().isBlank())) {
-                        request.setGoogleId(jwtSub);
-                    }
-                    if (jwtPicture != null && !jwtPicture.isBlank() && (request.getAvatar() == null || request.getAvatar().isBlank())) {
-                        request.setAvatar(jwtPicture);
-                    }
-                }
-            } catch (Exception ignored) {
-                // Fall back to direct fields in request
-            }
+        GoogleIdentity identity = googleVerifier.verify(idToken); // throws if forged/expired/wrong aud/iss
+        if (identity == null || !identity.emailVerified()) {
+            throw new UnauthorizedException("Email của tài khoản Google chưa được xác minh.");
+        }
+        String sub = identity.sub() == null ? "" : identity.sub().trim();
+        String email = identity.email() == null ? "" : identity.email().trim().toLowerCase();
+        if (sub.isEmpty() || email.isEmpty() || !email.contains("@")) {
+            throw new UnauthorizedException(GOOGLE_AUTH_FAILED);
         }
 
-        String email = request.getEmail() != null ? request.getEmail().trim().toLowerCase() : null;
-        if (email == null || email.isBlank() || !email.contains("@")) {
-            throw new BadRequestException("Địa chỉ email tài khoản Google không hợp lệ.");
-        }
-
-        Optional<User> existingUserOpt = userRepository.findByEmail(email);
         User user;
-
-        if (existingUserOpt.isPresent()) {
-            user = existingUserOpt.get();
-            if (!user.isActive()) {
-                throw new UnauthorizedException("Tài khoản này đã bị tạm khóa. Vui lòng liên hệ hỗ trợ EcoGreen.");
-            }
+        Optional<User> bySub = userRepository.findByGoogleSub(sub);
+        if (bySub.isPresent()) {
+            user = bySub.get();
+            requireActive(user);
             cartService.getOrCreateCart(user);
         } else {
-            // Auto-provision new user account
-            String baseName = (request.getName() != null && !request.getName().isBlank())
-                    ? request.getName()
-                    : email.substring(0, email.indexOf('@'));
-            String username = generateUniqueUsername(baseName);
-            String randomPassword = UUID.randomUUID().toString();
+            Optional<User> byEmail = userRepository.findByEmailIgnoreCase(email);
+            if (byEmail.isPresent()) {
+                user = byEmail.get();
+                if (user.getGoogleSub() != null && !user.getGoogleSub().equals(sub)) {
+                    throw new UnauthorizedException(GOOGLE_AUTH_FAILED);
+                }
+                requireActive(user);
+                if (user.getGoogleSub() == null) {
+                    user.setGoogleSub(sub);
+                    user = userRepository.save(user);
+                }
+                cartService.getOrCreateCart(user);
+            } else {
+                String baseName = (identity.name() != null && !identity.name().isBlank())
+                        ? identity.name()
+                        : email.substring(0, email.indexOf('@'));
+                Role userRole = roleRepository.findByName(Role.USER)
+                        .orElseThrow(() -> new IllegalStateException("USER role missing - run database init script."));
 
-            Role userRole = roleRepository.findByName(Role.USER)
-                    .orElseThrow(() -> new IllegalStateException("USER role missing - run database init script."));
+                User newUser = new User();
+                newUser.setUsername(generateUniqueUsername(baseName));
+                newUser.setEmail(email);
+                // Random, never disclosed: the account can only be entered through Google (or a later reset).
+                newUser.setPassword(passwordHasher.hash(UUID.randomUUID() + UUID.randomUUID().toString()));
+                newUser.setGoogleSub(sub);
+                newUser.setRoles(new HashSet<>(java.util.List.of(userRole)));
 
-            User newUser = new User();
-            newUser.setUsername(username);
-            newUser.setEmail(email);
-            newUser.setPassword(passwordHasher.hash(randomPassword));
-            newUser.setRoles(new HashSet<>(java.util.List.of(userRole)));
-
-            user = userRepository.save(newUser);
-            cartService.createCartForUser(user);
+                user = userRepository.save(newUser);
+                cartService.createCartForUser(user);
+            }
         }
 
         String token = tokenStore.issueToken(user.getId());
         return new AuthResponse(token, UserResponse.from(user));
     }
 
-    private String extractJsonField(String json, String field) {
-        if (json == null) return null;
-        try {
-            Pattern pattern = Pattern.compile("\"" + Pattern.quote(field) + "\"\\s*:\\s*\"(.*?)(?<!\\\\)\"");
-            Matcher matcher = pattern.matcher(json);
-            if (matcher.find()) {
-                String val = matcher.group(1);
-                return val.replace("\\\"", "\"").replace("\\\\", "\\");
-            }
-        } catch (Exception ignored) {}
-        return null;
+    private void requireActive(User user) {
+        if (!user.isActive()) {
+            throw new UnauthorizedException("Tài khoản này đã bị tạm khóa. Vui lòng liên hệ hỗ trợ EcoGreen.");
+        }
     }
 
     private String generateUniqueUsername(String preferred) {

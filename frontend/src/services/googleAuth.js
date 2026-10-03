@@ -1,82 +1,73 @@
 /**
- * Google OAuth 2.0 Client Service
- * Uses official Google Identity Services (GIS) library
+ * Google Sign-In (Google Identity Services, ID-token flow).
+ *
+ * The browser only obtains a signed Google ID token (`response.credential`) and forwards it to the backend,
+ * which verifies it. No profile/email/id is read or sent from the client side.
+ * The client ID comes ONLY from the build-time env var VITE_GOOGLE_CLIENT_ID (no localStorage override).
  */
 
-const STORAGE_KEY = 'ecogreen_google_client_id';
+const GIS_SRC = 'https://accounts.google.com/gsi/client';
+let gisPromise = null;
 
-export const getGoogleClientId = () => {
-  const envId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-  if (envId && envId.trim()) return envId.trim();
-  return localStorage.getItem(STORAGE_KEY) || '';
-};
+export const getGoogleClientId = () => (import.meta.env.VITE_GOOGLE_CLIENT_ID || '').trim();
 
-export const saveGoogleClientId = (clientId) => {
-  if (clientId && clientId.trim()) {
-    localStorage.setItem(STORAGE_KEY, clientId.trim());
-  } else {
-    localStorage.removeItem(STORAGE_KEY);
-  }
+/** Loads the GIS script on demand (idempotent). Resolves with `window.google.accounts.id`. */
+export const loadGoogleIdentity = () => {
+  if (window.google?.accounts?.id) return Promise.resolve(window.google.accounts.id);
+  if (gisPromise) return gisPromise;
+
+  gisPromise = new Promise((resolve, reject) => {
+    const done = () => (window.google?.accounts?.id
+      ? resolve(window.google.accounts.id)
+      : reject(new Error('GOOGLE_SDK_NOT_LOADED')));
+    const fail = () => {
+      gisPromise = null;
+      reject(new Error('GOOGLE_SDK_NOT_LOADED'));
+    };
+
+    let script = document.querySelector(`script[src="${GIS_SRC}"]`);
+    if (!script) {
+      script = document.createElement('script');
+      script.src = GIS_SRC;
+      script.async = true;
+      script.defer = true;
+      document.head.appendChild(script);
+    }
+    script.addEventListener('load', done, { once: true });
+    script.addEventListener('error', fail, { once: true });
+  });
+  return gisPromise;
 };
 
 /**
- * Triggers the REAL Google OAuth 2.0 popup using Google's official GIS SDK.
+ * Renders Google's official sign-in button into `container`.
+ * `onIdToken(idToken)` is called with the raw ID token (JWT string) - nothing else.
+ * Returns a Promise; rejects with MISSING_CLIENT_ID / GOOGLE_SDK_NOT_LOADED.
  */
-export const triggerRealGoogleLogin = ({ onSuccess, onError }) => {
+export const renderGoogleSignInButton = async (container, { onIdToken, onError, text = 'signin_with' }) => {
   const clientId = getGoogleClientId();
+  if (!clientId) throw new Error('MISSING_CLIENT_ID');
 
-  if (!clientId) {
-    if (onError) onError(new Error('MISSING_CLIENT_ID'));
-    return;
-  }
-
-  if (!window.google || !window.google.accounts || !window.google.accounts.oauth2) {
-    if (onError) onError(new Error('GOOGLE_SDK_NOT_LOADED'));
-    return;
-  }
-
-  try {
-    const tokenClient = window.google.accounts.oauth2.initTokenClient({
-      client_id: clientId,
-      scope: 'openid email profile',
-      callback: async (tokenResponse) => {
-        if (tokenResponse.error) {
-          if (onError) onError(new Error(tokenResponse.error_description || tokenResponse.error));
-          return;
-        }
-
-        try {
-          // Fetch verified user profile directly from Google servers
-          const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-            headers: {
-              Authorization: `Bearer ${tokenResponse.access_token}`
-            }
-          });
-
-          if (!res.ok) {
-            throw new Error('Không thể tải thông tin tài khoản từ Google.');
-          }
-
-          const googleProfile = await res.json();
-          // googleProfile: { sub, name, email, picture, email_verified }
-          if (onSuccess) {
-            onSuccess({
-              email: googleProfile.email,
-              name: googleProfile.name,
-              googleId: googleProfile.sub,
-              avatar: googleProfile.picture,
-              credential: tokenResponse.access_token
-            });
-          }
-        } catch (fetchErr) {
-          if (onError) onError(fetchErr);
-        }
+  const gis = await loadGoogleIdentity();
+  gis.initialize({
+    client_id: clientId,
+    callback: (response) => {
+      if (response?.credential) {
+        onIdToken(response.credential);
+      } else if (onError) {
+        onError(new Error('GOOGLE_NO_CREDENTIAL'));
       }
-    });
-
-    // Opens the authentic Google popup window
-    tokenClient.requestAccessToken({ prompt: 'select_account' });
-  } catch (err) {
-    if (onError) onError(err);
-  }
+    },
+    ux_mode: 'popup',
+    cancel_on_tap_outside: true
+  });
+  container.innerHTML = '';
+  gis.renderButton(container, {
+    type: 'standard',
+    theme: 'outline',
+    size: 'large',
+    text,
+    shape: 'rectangular',
+    width: Math.max(200, Math.min(400, container.offsetWidth || 240))
+  });
 };
