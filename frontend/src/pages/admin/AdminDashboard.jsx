@@ -894,7 +894,7 @@ const AdminDashboard = () => {
                   >
                     <option value="ALL">Tất cả vai trò</option>
                     <option value="ADMIN">Quản trị viên (ADMIN)</option>
-                    <option value="USER">Khách hàng (USER)</option>
+                    <option value="CUSTOMER">Khách hàng (CUSTOMER)</option>
                   </select>
                 </div>
               </div>

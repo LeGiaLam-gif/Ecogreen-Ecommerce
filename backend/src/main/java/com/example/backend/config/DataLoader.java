@@ -8,11 +8,13 @@ import com.example.backend.entity.Role;
 import com.example.backend.repository.RoleRepository;
 
 /**
- * Seeds ONLY structural system configuration (the two roles the app needs to
- * function). Deliberately does NOT create any business data: no demo users, no
- * demo products, no demo orders/payments. The application must start and behave
- * correctly with empty products/categories tables (see spec section "Database
- * data policy" / "empty database behavior").
+ * Seeds ONLY structural system configuration (the three roles the app needs to
+ * function: CUSTOMER, MANAGER, ADMIN - B01-P3). Deliberately does NOT create any
+ * business data: no demo users, no demo products, no demo orders/payments, and it
+ * never re-creates the legacy USER role (renamed to CUSTOMER by V5). The permission
+ * catalogue and role->permission mapping are seeded by V4-V6, not here. The
+ * application must start and behave correctly with empty products/categories
+ * tables (see spec section "Database data policy" / "empty database behavior").
  *
  * To try the admin area: register a normal account through the app, then
  * manually add the ADMIN role for that user, e.g.: INSERT INTO user_roles
@@ -25,11 +27,10 @@ public class DataLoader {
     @Bean
     public CommandLineRunner initRoles(RoleRepository roleRepository) {
         return args -> {
-            if (roleRepository.findByName(Role.USER).isEmpty()) {
-                roleRepository.save(new Role(null, Role.USER));
-            }
-            if (roleRepository.findByName(Role.ADMIN).isEmpty()) {
-                roleRepository.save(new Role(null, Role.ADMIN));
+            for (String name : new String[] { Role.CUSTOMER, Role.MANAGER, Role.ADMIN }) {
+                if (roleRepository.findByName(name).isEmpty()) {
+                    roleRepository.save(new Role(null, name));
+                }
             }
         };
     }

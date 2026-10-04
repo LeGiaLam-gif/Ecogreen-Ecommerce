@@ -39,7 +39,7 @@ class RefreshTokenServiceTest {
         user = new User();
         user.setId(5L);
         user.setUsername("alice");
-        user.setRoles(new HashSet<>(Set.of(new Role(1L, Role.USER))));
+        user.setRoles(new HashSet<>(Set.of(new Role(1L, Role.CUSTOMER))));
         when(users.findById(5L)).thenReturn(Optional.of(user));
         service = new RefreshTokenService(store.repository, users, 14, Clock.systemUTC());
     }

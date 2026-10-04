@@ -23,4 +23,16 @@ public class CurrentUser {
     public List<String> getRoles() { return roles; }
     public List<String> getPermissions() { return permissions; }
     public boolean isAdmin() { return roles.contains(Role.ADMIN); }
+
+    /** True when the (token-borne, database-sourced) permission list contains {@code code}. */
+    public boolean hasPermission(String code) { return code != null && permissions.contains(code); }
+
+    /** True when at least one of {@code codes} is held. */
+    public boolean hasAnyPermission(String... codes) {
+        if (codes == null) return false;
+        for (String code : codes) {
+            if (hasPermission(code)) return true;
+        }
+        return false;
+    }
 }

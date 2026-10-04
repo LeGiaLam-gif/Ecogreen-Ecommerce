@@ -55,7 +55,7 @@ class AuthServiceLoginTest {
         u.setEmail("alice@example.com");
         u.setPassword("bcrypt-hash");
         u.setActive(active);
-        u.setRoles(new HashSet<>(Set.of(new Role(1L, Role.USER), new Role(2L, Role.ADMIN))));
+        u.setRoles(new HashSet<>(Set.of(new Role(1L, Role.CUSTOMER), new Role(2L, Role.ADMIN))));
         return u;
     }
 
@@ -70,7 +70,7 @@ class AuthServiceLoginTest {
 
         CurrentUser parsed = jwtService.parse(response.accessToken()); // signature + expiry verified
         assertEquals(11L, parsed.getUserId());
-        assertEquals(List.of("ADMIN", "USER"), parsed.getRoles());
+        assertEquals(List.of("ADMIN", "CUSTOMER"), parsed.getRoles());
         assertEquals(List.of(), parsed.getPermissions());
         assertEquals("refresh-raw", response.refreshToken());
         assertEquals(900L, response.expiresIn());

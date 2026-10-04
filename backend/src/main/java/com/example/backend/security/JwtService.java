@@ -1,5 +1,6 @@
 package com.example.backend.security;
 
+import com.example.backend.entity.Permission;
 import com.example.backend.entity.Role;
 import com.example.backend.entity.User;
 import io.jsonwebtoken.Claims;
@@ -18,7 +19,7 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Issues and verifies signed (HS256) access tokens. Claims: sub = user id, roles, permissions (empty until B01-P3),
+ * Issues and verifies signed (HS256) access tokens. Claims: sub = user id, roles, permissions (B01-P3: from the database),
  * iat, exp, jti. The secret comes from JWT_SECRET; the application FAILS TO START when it is missing or shorter
  * than 32 bytes. Tokens/jti are never logged.
  */
@@ -57,12 +58,18 @@ public class JwtService {
 
     public String issueAccessToken(User user) {
         List<String> roles = user.getRoles().stream().map(Role::getName).sorted().toList();
+        // B01-P3: permissions of ALL the user's roles, from the database (Role.permissions is EAGER + batched), deduplicated
+        // and sorted so the claim is deterministic. Never taken from the client.
+        List<String> permissions = user.getRoles().stream()
+                .flatMap(r -> r.getPermissions().stream())
+                .map(Permission::getCode)
+                .distinct().sorted().toList();
         Date now = Date.from(clock.instant());
         Date exp = Date.from(clock.instant().plusSeconds(accessTtlSeconds));
         return Jwts.builder()
                 .subject(String.valueOf(user.getId()))
                 .claim("roles", roles)
-                .claim("permissions", List.of()) // populated by B01-P3
+                .claim("permissions", permissions)
                 .issuedAt(now)
                 .expiration(exp)
                 .id(UUID.randomUUID().toString())

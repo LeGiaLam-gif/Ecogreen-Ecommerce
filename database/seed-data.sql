@@ -7,12 +7,12 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- 2. Đảm bảo 2 role hệ thống tồn tại
-INSERT INTO roles (name) VALUES ('USER'), ('ADMIN')
+INSERT INTO roles (name) VALUES ('CUSTOMER'), ('ADMIN')
 ON CONFLICT (name) DO NOTHING;
 
 -- 3. Tạo tài khoản mẫu:
---    - admin / admin123 (quản trị viên, có role ADMIN + USER)
---    - khachhang / 123456 (khách mua hàng, có role USER)
+--    - admin / admin123 (quản trị viên, có role ADMIN + CUSTOMER)
+--    - khachhang / 123456 (khách mua hàng, có role CUSTOMER)
 INSERT INTO users (username, email, password, is_active, created_at, updated_at)
 VALUES 
   ('admin', 'admin@ecogreen.vn', crypt('admin123', gen_salt('bf', 10)), TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
@@ -22,8 +22,8 @@ ON CONFLICT (username) DO NOTHING;
 -- 4. Phân quyền trong bảng user_roles
 INSERT INTO user_roles (user_id, role_id)
 SELECT u.id, r.id FROM users u, roles r
-WHERE (u.username = 'admin' AND r.name IN ('USER', 'ADMIN'))
-   OR (u.username = 'khachhang' AND r.name = 'USER')
+WHERE (u.username = 'admin' AND r.name IN ('CUSTOMER', 'ADMIN'))
+   OR (u.username = 'khachhang' AND r.name = 'CUSTOMER')
 ON CONFLICT DO NOTHING;
 
 -- 5. Tạo giỏ hàng gắn với mỗi tài khoản (quan hệ 1-1)

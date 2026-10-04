@@ -55,7 +55,7 @@ public class AuthService {
             throw new ConflictException("Địa chỉ email này đã được đăng ký.");
         }
 
-        Role userRole = roleRepository.findByName(Role.USER)
+        Role userRole = roleRepository.findByName(Role.CUSTOMER)
                 .orElseThrow(() -> new IllegalStateException("Quyền USER không tồn tại trong hệ thống."));
 
         User user = new User();
@@ -168,7 +168,7 @@ public class AuthService {
                 String baseName = (identity.name() != null && !identity.name().isBlank())
                         ? identity.name()
                         : email.substring(0, email.indexOf('@'));
-                Role userRole = roleRepository.findByName(Role.USER)
+                Role userRole = roleRepository.findByName(Role.CUSTOMER)
                         .orElseThrow(() -> new IllegalStateException("USER role missing - run database init script."));
 
                 User newUser = new User();

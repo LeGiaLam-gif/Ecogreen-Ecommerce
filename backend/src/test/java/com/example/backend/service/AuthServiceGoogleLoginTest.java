@@ -64,7 +64,7 @@ class AuthServiceGoogleLoginTest {
         u.setEmail(email);
         u.setPassword("hash");
         u.setGoogleSub(googleSub);
-        u.setRoles(new HashSet<>(List.of(new Role(1L, Role.USER))));
+        u.setRoles(new HashSet<>(List.of(new Role(1L, Role.CUSTOMER))));
         return u;
     }
 
@@ -145,7 +145,7 @@ class AuthServiceGoogleLoginTest {
 
         assertEquals("access-token", response.accessToken());
         assertEquals("refresh-token", response.refreshToken());
-        assertEquals(7L, response.user.id);
+        assertEquals(7L, response.user().id);
         assertEquals("sub-123", existing.getGoogleSub());
         verify(userRepository).save(existing);
         verify(cartService).getOrCreateCart(existing);
@@ -159,7 +159,7 @@ class AuthServiceGoogleLoginTest {
         when(userRepository.findByGoogleSub("sub-new")).thenReturn(Optional.empty());
         when(userRepository.findByEmailIgnoreCase("new.user@example.com")).thenReturn(Optional.empty());
         when(userRepository.existsByUsername(anyString())).thenReturn(false);
-        when(roleRepository.findByName(Role.USER)).thenReturn(Optional.of(new Role(1L, Role.USER)));
+        when(roleRepository.findByName(Role.CUSTOMER)).thenReturn(Optional.of(new Role(1L, Role.CUSTOMER)));
         when(passwordHasher.hash(anyString())).thenReturn("random-bcrypt-hash");
         when(userRepository.save(any(User.class))).thenAnswer(inv -> {
             User u = inv.getArgument(0);
@@ -177,7 +177,7 @@ class AuthServiceGoogleLoginTest {
         assertEquals("new.user@example.com", created.getEmail());
         assertEquals("sub-new", created.getGoogleSub());
         assertEquals("random-bcrypt-hash", created.getPassword());
-        assertTrue(created.hasRole(Role.USER));
+        assertTrue(created.hasRole(Role.CUSTOMER));
         assertFalse(created.hasRole(Role.ADMIN));
         assertNotNull(created.getUsername());
         verify(passwordHasher).hash(anyString()); // random, unusable password

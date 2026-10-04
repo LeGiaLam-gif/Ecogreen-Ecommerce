@@ -1,5 +1,6 @@
 package com.example.backend.security;
 
+import com.example.backend.entity.Permission;
 import com.example.backend.entity.Role;
 import com.example.backend.entity.User;
 import io.jsonwebtoken.JwtException;
@@ -39,12 +40,12 @@ class JwtServiceTest {
 
     @Test
     void issue_validToken_containsSubRolesPermissionsIatExpJti_andParsesBack() {
-        String token = jwt.issueAccessToken(user(7, Role.USER, Role.ADMIN));
+        String token = jwt.issueAccessToken(user(7, Role.CUSTOMER, Role.ADMIN));
 
         var claims = Jwts.parser().verifyWith(Keys.hmacShaKeyFor(TestJwt.SECRET.getBytes(StandardCharsets.UTF_8)))
                 .build().parseSignedClaims(token).getPayload();
         assertEquals("7", claims.getSubject());
-        assertEquals(List.of("ADMIN", "USER"), claims.get("roles"));
+        assertEquals(List.of("ADMIN", "CUSTOMER"), claims.get("roles"));
         assertEquals(List.of(), claims.get("permissions"));
         assertTrue(claims.getId() != null && !claims.getId().isBlank());
         assertEquals(900_000L, claims.getExpiration().getTime() - claims.getIssuedAt().getTime(), 1000);
@@ -52,21 +53,21 @@ class JwtServiceTest {
         CurrentUser current = jwt.parse(token);
         assertEquals(7L, current.getUserId());
         assertTrue(current.isAdmin());
-        assertEquals(List.of("ADMIN", "USER"), current.getRoles());
+        assertEquals(List.of("ADMIN", "CUSTOMER"), current.getRoles());
         assertEquals(List.of(), current.getPermissions());
     }
 
     @Test
     void jwt_expiredToken_isRejected() {
         Clock past = Clock.fixed(Instant.now().minus(Duration.ofHours(1)), ZoneOffset.UTC);
-        String expired = new JwtService(TestJwt.SECRET, 900, past).issueAccessToken(user(1, Role.USER));
+        String expired = new JwtService(TestJwt.SECRET, 900, past).issueAccessToken(user(1, Role.CUSTOMER));
 
         assertThrows(JwtException.class, () -> jwt.parse(expired));
     }
 
     @Test
     void jwt_tamperedSignature_isRejected() {
-        String token = jwt.issueAccessToken(user(1, Role.USER));
+        String token = jwt.issueAccessToken(user(1, Role.CUSTOMER));
         String[] parts = token.split("\\.");
         String sig = parts[2];
         String flipped = sig.substring(0, sig.length() - 2) + (sig.endsWith("AA") ? "BB" : "AA");
@@ -76,7 +77,7 @@ class JwtServiceTest {
 
     @Test
     void jwt_tamperedPayload_isRejected() {
-        String token = jwt.issueAccessToken(user(1, Role.USER));
+        String token = jwt.issueAccessToken(user(1, Role.CUSTOMER));
         String[] parts = token.split("\\.");
         String forgedPayload = Base64.getUrlEncoder().withoutPadding().encodeToString(
                 "{\"sub\":\"1\",\"roles\":[\"ADMIN\"],\"permissions\":[]}".getBytes(StandardCharsets.UTF_8));
@@ -87,7 +88,7 @@ class JwtServiceTest {
     @Test
     void jwt_signedWithOtherKey_unsignedAndLegacyUuidTokens_areRejected() {
         String otherKeyToken = new JwtService("another-secret-another-secret-another-secret-123456", 900)
-                .issueAccessToken(user(1, Role.USER));
+                .issueAccessToken(user(1, Role.CUSTOMER));
         String unsigned = Jwts.builder().subject("1").claim("roles", List.of("ADMIN")).compact();
 
         assertThrows(JwtException.class, () -> jwt.parse(otherKeyToken));
@@ -106,7 +107,25 @@ class JwtServiceTest {
 
     @Test
     void eachToken_hasUniqueJti() {
-        User u = user(1, Role.USER);
+        User u = user(1, Role.CUSTOMER);
         assertNotEquals(jwt.issueAccessToken(u), jwt.issueAccessToken(u));
+    }
+
+    @Test
+    void tokenClaims_containPermissionsFromAllRoles_deduplicated() {
+        Role manager = new Role(1L, Role.MANAGER);
+        manager.setPermissions(new HashSet<>(Set.of(new Permission(1L, "product:view"), new Permission(2L, "order:view"))));
+        Role admin = new Role(2L, Role.ADMIN);
+        admin.setPermissions(new HashSet<>(Set.of(new Permission(1L, "product:view"), new Permission(3L, "audit:view"))));
+        User u = new User();
+        u.setId(5L);
+        u.setRoles(new HashSet<>(Set.of(manager, admin)));
+
+        String token = jwt.issueAccessToken(u);
+
+        var claims = Jwts.parser().verifyWith(Keys.hmacShaKeyFor(TestJwt.SECRET.getBytes(StandardCharsets.UTF_8)))
+                .build().parseSignedClaims(token).getPayload();
+        assertEquals(List.of("audit:view", "order:view", "product:view"), claims.get("permissions")); // union, no dupes, sorted
+        assertEquals(List.of("audit:view", "order:view", "product:view"), jwt.parse(token).getPermissions());
     }
 }

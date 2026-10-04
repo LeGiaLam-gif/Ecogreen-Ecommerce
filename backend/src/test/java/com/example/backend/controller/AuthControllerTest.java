@@ -55,7 +55,7 @@ class AuthControllerTest {
         u.setId(3L);
         u.setUsername("alice");
         u.setEmail("alice@example.com");
-        u.setRoles(new HashSet<>(Set.of(new Role(1L, Role.USER))));
+        u.setRoles(new HashSet<>(Set.of(new Role(1L, Role.CUSTOMER))));
         return u;
     }
 
@@ -95,7 +95,7 @@ class AuthControllerTest {
                 .andExpect(jsonPath("$.data.refreshToken").value("ref"))
                 .andExpect(jsonPath("$.data.expiresIn").value(900))
                 .andExpect(jsonPath("$.data.user.username").value("alice"))
-                .andExpect(jsonPath("$.data.user.roles[0]").value("USER"))
+                .andExpect(jsonPath("$.data.user.roles[0]").value("CUSTOMER"))
                 .andExpect(jsonPath("$.data.user.permissions").isArray())
                 .andReturn();
         assertTrue(result.getResponse().getContentAsString().contains("\"meta\":null"));
