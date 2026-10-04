@@ -1,7 +1,6 @@
 package com.example.backend.controller;
 
 import com.example.backend.dto.UserResponse;
-import com.example.backend.entity.User;
 import com.example.backend.security.AuthGuard;
 import com.example.backend.service.UserService;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -18,13 +17,6 @@ public class UserController {
 
     @Autowired private UserService userService;
     @Autowired private AuthGuard authGuard;
-
-    /** The currently authenticated user's own profile. */
-    @GetMapping("/me")
-    public UserResponse me(HttpServletRequest request) {
-        User user = authGuard.requireUser(request);
-        return UserResponse.from(user);
-    }
 
     /** Admin-only: list all users. */
     @GetMapping

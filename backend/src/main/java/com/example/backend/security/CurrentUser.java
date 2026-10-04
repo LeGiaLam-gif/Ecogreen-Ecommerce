@@ -1,15 +1,26 @@
 package com.example.backend.security;
 
-/** Resolved identity for the current request, attached by {@link AuthInterceptor}. */
+import com.example.backend.entity.Role;
+
+import java.util.List;
+
+/**
+ * Resolved identity for the current request, attached by {@link AuthInterceptor}.
+ * roles/permissions come from the verified access token (valid for at most the access-token TTL).
+ */
 public class CurrentUser {
     private final Long userId;
-    private final boolean admin;
+    private final List<String> roles;
+    private final List<String> permissions;
 
-    public CurrentUser(Long userId, boolean admin) {
+    public CurrentUser(Long userId, List<String> roles, List<String> permissions) {
         this.userId = userId;
-        this.admin = admin;
+        this.roles = roles == null ? List.of() : List.copyOf(roles);
+        this.permissions = permissions == null ? List.of() : List.copyOf(permissions);
     }
 
     public Long getUserId() { return userId; }
-    public boolean isAdmin() { return admin; }
+    public List<String> getRoles() { return roles; }
+    public List<String> getPermissions() { return permissions; }
+    public boolean isAdmin() { return roles.contains(Role.ADMIN); }
 }

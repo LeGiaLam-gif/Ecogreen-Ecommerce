@@ -14,6 +14,9 @@ public interface UserRepository extends JpaRepository<User, Long> {
 
     Optional<User> findByGoogleSub(String googleSub);
 
+    /** Cheap per-request check used by AuthInterceptor: no entity, no roles loaded. */
+    boolean existsByIdAndActiveTrue(Long id);
+
     boolean existsByUsername(String username);
 
     boolean existsByEmail(String email);

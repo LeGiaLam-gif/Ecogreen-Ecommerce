@@ -11,6 +11,7 @@ public class UserResponse {
     public String email;
     public boolean active;
     public List<String> roles;
+    public List<String> permissions = List.of(); // populated by B01-P3
 
     // Note: password is never included in any API response.
     public static UserResponse from(User u) {
@@ -20,6 +21,7 @@ public class UserResponse {
         r.email = u.getEmail();
         r.active = u.isActive();
         r.roles = u.getRoles().stream().map(Role::getName).collect(Collectors.toList());
+        r.permissions = List.of();
         return r;
     }
 }

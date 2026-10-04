@@ -8,7 +8,8 @@ import com.example.backend.exception.GoogleLoginUnavailableException;
 import com.example.backend.exception.UnauthorizedException;
 import com.example.backend.repository.RoleRepository;
 import com.example.backend.repository.UserRepository;
-import com.example.backend.security.AuthTokenStore;
+import com.example.backend.security.JwtService;
+import com.example.backend.security.RefreshTokenService;
 import com.example.backend.security.GoogleIdentity;
 import com.example.backend.security.GoogleIdentityVerifier;
 import org.junit.jupiter.api.Test;
@@ -31,7 +32,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -46,7 +46,8 @@ class AuthServiceGoogleLoginTest {
     @Mock private UserRepository userRepository;
     @Mock private RoleRepository roleRepository;
     @Mock private PasswordHasher passwordHasher;
-    @Mock private AuthTokenStore tokenStore;
+    @Mock private JwtService jwtService;
+    @Mock private RefreshTokenService refreshTokenService;
     @Mock private CartService cartService;
     @Mock private GoogleIdentityVerifier googleVerifier;
 
@@ -78,7 +79,8 @@ class AuthServiceGoogleLoginTest {
 
         assertThrows(UnauthorizedException.class, () -> authService.loginWithGoogle(tokenRequest()));
 
-        verify(tokenStore, never()).issueToken(anyLong());
+        verify(jwtService, never()).issueAccessToken(any());
+        verify(refreshTokenService, never()).issueNewFamily(any());
         verify(userRepository, never()).save(any());
     }
 
@@ -91,7 +93,8 @@ class AuthServiceGoogleLoginTest {
 
         assertThrows(UnauthorizedException.class, () -> authService.loginWithGoogle(tokenRequest()));
 
-        verify(tokenStore, never()).issueToken(anyLong());
+        verify(jwtService, never()).issueAccessToken(any());
+        verify(refreshTokenService, never()).issueNewFamily(any());
     }
 
     @Test
@@ -104,7 +107,8 @@ class AuthServiceGoogleLoginTest {
 
         verify(userRepository, never()).findByEmailIgnoreCase(anyString());
         verify(userRepository, never()).save(any());
-        verify(tokenStore, never()).issueToken(anyLong());
+        verify(jwtService, never()).issueAccessToken(any());
+        verify(refreshTokenService, never()).issueNewFamily(any());
     }
 
     /** The original exploit: POST /api/auth/google {"email":"admin@ecogreen.vn"} with no token. */
@@ -122,7 +126,7 @@ class AuthServiceGoogleLoginTest {
         assertThrows(UnauthorizedException.class, () -> authService.loginWithGoogle(new GoogleAuthRequest("  ")));
         assertThrows(UnauthorizedException.class, () -> authService.loginWithGoogle(null));
 
-        verifyNoInteractions(userRepository, tokenStore, cartService);
+        verifyNoInteractions(userRepository, jwtService, refreshTokenService, cartService);
     }
 
     @Test
@@ -134,11 +138,13 @@ class AuthServiceGoogleLoginTest {
         when(userRepository.findByGoogleSub("sub-123")).thenReturn(Optional.empty());
         when(userRepository.findByEmailIgnoreCase("alice@example.com")).thenReturn(Optional.of(existing));
         when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(tokenStore.issueToken(7L)).thenReturn("session-token");
+        when(jwtService.issueAccessToken(existing)).thenReturn("access-token");
+        when(refreshTokenService.issueNewFamily(existing)).thenReturn("refresh-token");
 
         AuthResponse response = authService.loginWithGoogle(tokenRequest());
 
-        assertEquals("session-token", response.token);
+        assertEquals("access-token", response.accessToken());
+        assertEquals("refresh-token", response.refreshToken());
         assertEquals(7L, response.user.id);
         assertEquals("sub-123", existing.getGoogleSub());
         verify(userRepository).save(existing);
@@ -160,7 +166,8 @@ class AuthServiceGoogleLoginTest {
             u.setId(42L);
             return u;
         });
-        when(tokenStore.issueToken(42L)).thenReturn("session-token");
+        when(jwtService.issueAccessToken(any(User.class))).thenReturn("access-token");
+        when(refreshTokenService.issueNewFamily(any(User.class))).thenReturn("refresh-token");
 
         AuthResponse response = authService.loginWithGoogle(tokenRequest());
 
@@ -175,7 +182,8 @@ class AuthServiceGoogleLoginTest {
         assertNotNull(created.getUsername());
         verify(passwordHasher).hash(anyString()); // random, unusable password
         verify(cartService).createCartForUser(created);
-        assertEquals("session-token", response.token);
+        assertEquals("access-token", response.accessToken());
+        assertEquals("refresh-token", response.refreshToken());
     }
 
     @Test
@@ -191,7 +199,8 @@ class AuthServiceGoogleLoginTest {
 
         assertEquals("sub-original", existing.getGoogleSub());
         verify(userRepository, never()).save(any());
-        verify(tokenStore, never()).issueToken(anyLong());
+        verify(jwtService, never()).issueAccessToken(any());
+        verify(refreshTokenService, never()).issueNewFamily(any());
     }
 
     @Test
@@ -201,7 +210,7 @@ class AuthServiceGoogleLoginTest {
         assertThrows(GoogleLoginUnavailableException.class, () -> authService.loginWithGoogle(tokenRequest()));
 
         verify(googleVerifier, never()).verify(anyString());
-        verifyNoInteractions(userRepository, tokenStore);
+        verifyNoInteractions(userRepository, jwtService, refreshTokenService);
     }
 
     @Test
@@ -215,6 +224,7 @@ class AuthServiceGoogleLoginTest {
 
         assertThrows(UnauthorizedException.class, () -> authService.loginWithGoogle(tokenRequest()));
 
-        verify(tokenStore, never()).issueToken(anyLong());
+        verify(jwtService, never()).issueAccessToken(any());
+        verify(refreshTokenService, never()).issueNewFamily(any());
     }
 }

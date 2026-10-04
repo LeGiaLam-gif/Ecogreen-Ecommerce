@@ -1,5 +1,14 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import * as authApi from '../services/authApi';
+import {
+  clearSession,
+  getAccessToken,
+  getRefreshToken,
+  getStoredUser,
+  purgeLegacySession,
+  saveSession,
+  saveUser
+} from '../services/authStorage';
 
 const AuthContext = createContext();
 
@@ -11,42 +20,35 @@ export const useAuth = () => {
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(() => {
-    try {
-      const stored = localStorage.getItem('user');
-      return stored ? JSON.parse(stored) : null;
-    } catch {
-      return null;
-    }
+    purgeLegacySession(); // old UUID sessions are cleared silently => treated as logged out
+    return getAccessToken() || getRefreshToken() ? getStoredUser() : null;
   });
   const [loading, setLoading] = useState(false);
 
-  // On refresh, re-validate the stored token against the backend so a
-  // revoked/expired token doesn't leave the UI in a stale "logged in" state.
+  // On reload, re-validate the stored session against the backend (http.js refreshes an expired access token once).
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token && !user) {
+    if ((getAccessToken() || getRefreshToken()) && !user) {
       authApi
         .getMe()
         .then((me) => {
           setUser(me);
-          localStorage.setItem('user', JSON.stringify(me));
+          saveUser(me);
         })
-        .catch(() => {
-          localStorage.removeItem('token');
-          localStorage.removeItem('user');
-        });
+        .catch(() => clearSession());
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const startSession = (data) => {
+    saveSession(data);
+    setUser(data.user);
+    return data.user;
+  };
+
   const login = async (username, password) => {
     setLoading(true);
     try {
-      const data = await authApi.login(username, password);
-      localStorage.setItem('token', data.token);
-      localStorage.setItem('user', JSON.stringify(data.user));
-      setUser(data.user);
-      return data.user;
+      return startSession(await authApi.login(username, password));
     } finally {
       setLoading(false);
     }
@@ -55,11 +57,7 @@ export const AuthProvider = ({ children }) => {
   const loginWithGoogle = async (idToken) => {
     setLoading(true);
     try {
-      const data = await authApi.loginWithGoogle(idToken);
-      localStorage.setItem('token', data.token);
-      localStorage.setItem('user', JSON.stringify(data.user));
-      setUser(data.user);
-      return data.user;
+      return startSession(await authApi.loginWithGoogle(idToken));
     } finally {
       setLoading(false);
     }
@@ -75,9 +73,9 @@ export const AuthProvider = ({ children }) => {
   };
 
   const logout = () => {
-    authApi.logout().catch(() => {});
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
+    const refreshToken = getRefreshToken();
+    if (refreshToken) authApi.logout(refreshToken).catch(() => {});
+    clearSession();
     setUser(null);
   };
 

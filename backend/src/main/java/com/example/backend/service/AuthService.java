@@ -2,6 +2,7 @@ package com.example.backend.service;
 
 import com.example.backend.dto.AuthResponse;
 import com.example.backend.dto.GoogleAuthRequest;
+import com.example.backend.dto.TokenPairResponse;
 import com.example.backend.dto.UserResponse;
 import com.example.backend.entity.Role;
 import com.example.backend.entity.User;
@@ -11,7 +12,9 @@ import com.example.backend.exception.GoogleLoginUnavailableException;
 import com.example.backend.exception.UnauthorizedException;
 import com.example.backend.repository.RoleRepository;
 import com.example.backend.repository.UserRepository;
-import com.example.backend.security.AuthTokenStore;
+import com.example.backend.security.JwtService;
+import com.example.backend.security.LoginThrottle;
+import com.example.backend.security.RefreshTokenService;
 import com.example.backend.security.GoogleIdentity;
 import com.example.backend.security.GoogleIdentityVerifier;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -26,11 +29,17 @@ import java.util.UUID;
 public class AuthService {
 
     private static final String GOOGLE_AUTH_FAILED = "Xác thực Google không thành công.";
+    private static final String BAD_CREDENTIALS = "Tên đăng nhập hoặc mật khẩu không chính xác.";
+
+    /** Valid BCrypt hash of a random value, built once; lets login spend the same time for unknown usernames. */
+    private volatile String dummyHash;
 
     @Autowired private UserRepository userRepository;
     @Autowired private RoleRepository roleRepository;
     @Autowired private PasswordHasher passwordHasher;
-    @Autowired private AuthTokenStore tokenStore;
+    @Autowired private JwtService jwtService;
+    @Autowired private RefreshTokenService refreshTokenService;
+    @Autowired private LoginThrottle loginThrottle;
     @Autowired private CartService cartService;
     @Autowired private GoogleIdentityVerifier googleVerifier;
 
@@ -61,18 +70,54 @@ public class AuthService {
         return saved;
     }
 
-    /** Returns a fresh opaque bearer token for the given credentials. */
-    public String login(String username, String password) {
-        User user = userRepository.findByUsername(username)
-                .orElseThrow(() -> new UnauthorizedException("Tên đăng nhập hoặc mật khẩu không chính xác."));
+    /**
+     * Username/password login. One user lookup; unknown username and wrong password are indistinguishable (same message,
+     * and a BCrypt comparison is always performed so timing does not reveal which usernames exist). The "locked"
+     * message is only revealed after the correct password. Failed attempts are throttled per username + client IP.
+     */
+    public AuthResponse login(String username, String password, String clientIp) {
+        if (username == null || username.isBlank() || password == null || password.isEmpty()) {
+            throw new UnauthorizedException(BAD_CREDENTIALS);
+        }
+        loginThrottle.checkAllowed(username, clientIp);
 
+        User user = userRepository.findByUsername(username).orElse(null);
+        boolean passwordOk = passwordHasher.matches(password, user != null ? user.getPassword() : dummyHash());
+        if (user == null || !passwordOk) {
+            loginThrottle.recordFailure(username, clientIp);
+            throw new UnauthorizedException(BAD_CREDENTIALS);
+        }
         if (!user.isActive()) {
             throw new UnauthorizedException("Tài khoản này đã bị khóa. Vui lòng liên hệ quản trị viên.");
         }
-        if (!passwordHasher.matches(password, user.getPassword())) {
-            throw new UnauthorizedException("Tên đăng nhập hoặc mật khẩu không chính xác.");
+        loginThrottle.recordSuccess(username, clientIp);
+        return issueSession(user);
+    }
+
+    /** Rotates the refresh token (reuse of a revoked one revokes the whole family) and issues a new access token. */
+    public TokenPairResponse refresh(String refreshToken) {
+        RefreshTokenService.Rotated rotated = refreshTokenService.rotate(refreshToken);
+        return new TokenPairResponse(jwtService.issueAccessToken(rotated.user()), rotated.refreshToken(),
+                jwtService.getAccessTtlSeconds());
+    }
+
+    /** Revokes exactly the given refresh token; the access token simply expires. */
+    public void logout(String refreshToken) {
+        refreshTokenService.revoke(refreshToken);
+    }
+
+    private AuthResponse issueSession(User user) {
+        return new AuthResponse(jwtService.issueAccessToken(user), refreshTokenService.issueNewFamily(user),
+                jwtService.getAccessTtlSeconds(), UserResponse.from(user));
+    }
+
+    private String dummyHash() {
+        String h = dummyHash;
+        if (h == null) {
+            h = passwordHasher.hash(UUID.randomUUID().toString());
+            dummyHash = h;
         }
-        return tokenStore.issueToken(user.getId());
+        return h;
     }
 
     /**
@@ -139,8 +184,7 @@ public class AuthService {
             }
         }
 
-        String token = tokenStore.issueToken(user.getId());
-        return new AuthResponse(token, UserResponse.from(user));
+        return issueSession(user);
     }
 
     private void requireActive(User user) {
@@ -172,7 +216,4 @@ public class AuthService {
         return candidate;
     }
 
-    public void logout(String token) {
-        tokenStore.revoke(token);
-    }
 }

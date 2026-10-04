@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { clearSession, getAccessToken, getRefreshToken, saveTokens } from './authStorage';
 
 // Backend base URL (proxied via Vite server to Spring Boot on port 8081)
 export const API_BASE_URL = '/api';
@@ -31,9 +32,9 @@ export const isV1Request = (config) => V1_PATH.test(requestPath(config));
 
 const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
-// Attach the bearer token (if any) to every request automatically.
+// Attach the access token (JWT, if any) to every request automatically.
 http.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token');
+  const token = getAccessToken();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -76,8 +77,88 @@ const normaliseError = (error) => {
   return Promise.reject(normalised);
 };
 
-// Centralised error normalisation so pages can show a friendly message
-// instead of raw axios/console errors.
-http.interceptors.response.use(unwrapV1, normaliseError);
+// ── Access-token refresh (B01-P2) ────────────────────────────────────────────
+
+// These endpoints never trigger a refresh (a 401 there is the real answer).
+const NO_REFRESH_PATH = /^\/api\/v1\/auth\/(login|register|google|refresh|logout)\/?$/;
+
+// A bare axios instance (no interceptors) so a failing refresh can never recurse into itself.
+const refreshClient = axios.create({ baseURL: API_BASE_URL });
+
+const callRefreshEndpoint = async (refreshToken) => {
+  const res = await refreshClient.post('/v1/auth/refresh', { refreshToken });
+  const pair = res.data?.data;
+  if (!pair?.accessToken || !pair?.refreshToken) throw new Error('INVALID_REFRESH_RESPONSE');
+  saveTokens(pair);
+  return pair.accessToken;
+};
+
+// Runs inside a cross-tab lock when available. If another tab already rotated the token while we waited for the
+// lock, reuse its result instead of presenting an already-rotated refresh token (which would revoke the family).
+const performRefresh = async (startedWith) => {
+  const run = async () => {
+    const current = getRefreshToken();
+    if (!current) throw new Error('NO_REFRESH_TOKEN');
+    if (current !== startedWith && getAccessToken()) return getAccessToken();
+    return callRefreshEndpoint(current);
+  };
+  if (typeof navigator !== 'undefined' && navigator.locks?.request) {
+    return navigator.locks.request('ecogreen-token-refresh', run);
+  }
+  return run();
+};
+
+// Single-flight: every concurrent 401 awaits the SAME refresh promise.
+let refreshPromise = null;
+const refreshOnce = (startedWith) => {
+  if (!refreshPromise) {
+    refreshPromise = performRefresh(startedWith).finally(() => {
+      refreshPromise = null;
+    });
+  }
+  return refreshPromise;
+};
+
+const redirectToLogin = () => {
+  clearSession();
+  if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+    window.location.assign('/login');
+  }
+};
+
+const shouldRefresh = (error) => {
+  const config = error?.config;
+  if (!config || config._retry || error?.response?.status !== 401) return false;
+  if (!getRefreshToken()) return false;
+  if (NO_REFRESH_PATH.test(requestPath(config))) return false;
+  const apiCode = error.response?.data?.error?.code; // /api/v1 errors carry a code; legacy 401s do not
+  return !apiCode || apiCode === 'UNAUTHENTICATED';
+};
+
+const handleResponseError = async (error) => {
+  if (shouldRefresh(error)) {
+    error.config._retry = true; // at most one refresh + one retry per request
+    // The request was sent with an access token that has since been replaced (a concurrent refresh finished first):
+    // just retry with the current one instead of rotating the refresh token again.
+    const sent = error.config.headers?.Authorization;
+    if (sent && getAccessToken() && sent !== `Bearer ${getAccessToken()}`) {
+      return http(error.config);
+    }
+    try {
+      await refreshOnce(getRefreshToken());
+    } catch {
+      // ANY failed refresh (401/403, 5xx, network error, malformed response, no refresh token) ends the session:
+      // clear storage and go to /login (B01-P2 spec). After clearing there is no refresh token left, so
+      // shouldRefresh() is false for every later 401 and no refresh loop is possible.
+      redirectToLogin();
+      return normaliseError(error);
+    }
+    return http(error.config); // request interceptor re-attaches the new access token
+  }
+  return normaliseError(error);
+};
+
+// Centralised handling: 401 -> single-flight refresh + one retry; everything else -> normalised error with friendlyMessage.
+http.interceptors.response.use(unwrapV1, handleResponseError);
 
 export default http;

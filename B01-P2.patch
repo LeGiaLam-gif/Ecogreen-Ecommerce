@@ -1,0 +1,2523 @@
+diff --git a/.env.example b/.env.example
+index af394d9..9b8fb06 100644
+--- a/.env.example
++++ b/.env.example
+@@ -12,3 +12,7 @@ DB_PASSWORD=changeme
+ GOOGLE_CLIENT_ID=
+ # Frontend (Vite): the same OAuth 2.0 Web client ID, read at build time. This is the ONLY source of the client ID.
+ VITE_GOOGLE_CLIENT_ID=
++
++# JWT signing key for access tokens (REQUIRED - the backend fails to start without it). At least 32 bytes of random data, e.g.:
++#   openssl rand -base64 48
++JWT_SECRET=
+diff --git a/backend/pom.xml b/backend/pom.xml
+index de823ef..0d890df 100644
+--- a/backend/pom.xml
++++ b/backend/pom.xml
+@@ -55,6 +55,24 @@
+ 			<groupId>org.springframework.boot</groupId>
+ 			<artifactId>spring-boot-starter-validation</artifactId>
+ 		</dependency>
++		<dependency>
++			<!-- B01-P2: signed JWT access tokens (HS256). gson is used as JSON backend (Boot 4 ships Jackson 3, jjwt-jackson needs Jackson 2). -->
++			<groupId>io.jsonwebtoken</groupId>
++			<artifactId>jjwt-api</artifactId>
++			<version>0.12.6</version>
++		</dependency>
++		<dependency>
++			<groupId>io.jsonwebtoken</groupId>
++			<artifactId>jjwt-impl</artifactId>
++			<version>0.12.6</version>
++			<scope>runtime</scope>
++		</dependency>
++		<dependency>
++			<groupId>io.jsonwebtoken</groupId>
++			<artifactId>jjwt-gson</artifactId>
++			<version>0.12.6</version>
++			<scope>runtime</scope>
++		</dependency>
+ 		<dependency>
+ 			<!-- B01-P1: verifies Google ID tokens (signature, iss, aud, exp) via GoogleIdTokenVerifier. -->
+ 			<groupId>com.google.api-client</groupId>
+diff --git a/backend/src/main/java/com/example/backend/controller/AuthController.java b/backend/src/main/java/com/example/backend/controller/AuthController.java
+index 8d3394f..431b8fe 100644
+--- a/backend/src/main/java/com/example/backend/controller/AuthController.java
++++ b/backend/src/main/java/com/example/backend/controller/AuthController.java
+@@ -1,59 +1,79 @@
+ package com.example.backend.controller;
+ 
++import com.example.backend.api.ApiError;
++import com.example.backend.api.ApiErrorCode;
++import com.example.backend.api.ApiResponse;
+ import com.example.backend.dto.AuthResponse;
+ import com.example.backend.dto.GoogleAuthRequest;
++import com.example.backend.dto.LoginRequest;
++import com.example.backend.dto.RefreshTokenRequest;
++import com.example.backend.dto.RegisterRequest;
++import com.example.backend.dto.TokenPairResponse;
+ import com.example.backend.dto.UserResponse;
+ import com.example.backend.entity.User;
+ import com.example.backend.exception.GoogleLoginUnavailableException;
+-import com.example.backend.repository.UserRepository;
++import com.example.backend.security.AuthGuard;
++import com.example.backend.security.LoginThrottle;
+ import com.example.backend.service.AuthService;
++import jakarta.servlet.http.HttpServletRequest;
++import jakarta.validation.Valid;
+ import org.springframework.beans.factory.annotation.Autowired;
+ import org.springframework.http.ResponseEntity;
+ import org.springframework.web.bind.annotation.*;
+ 
+-import jakarta.servlet.http.HttpServletRequest;
+-import java.util.Map;
+-
++/** B01-P2: all authentication traffic lives under /api/v1/auth (contract: docs/ai/contracts/B01-auth.md). */
+ @RestController
+-@RequestMapping("/api/auth")
++@RequestMapping("/api/v1/auth")
+ public class AuthController {
+ 
+     @Autowired private AuthService authService;
+-    @Autowired private UserRepository userRepository;
++    @Autowired private AuthGuard authGuard;
+ 
+     @PostMapping("/register")
+-    public ResponseEntity<UserResponse> register(@RequestBody Map<String, String> body) {
+-        User user = authService.register(body.get("username"), body.get("email"), body.get("password"));
+-        return ResponseEntity.status(201).body(UserResponse.from(user));
++    public ResponseEntity<ApiResponse<UserResponse>> register(@RequestBody RegisterRequest body) {
++        User user = authService.register(body.username(), body.email(), body.password());
++        return ResponseEntity.status(201).body(ApiResponse.of(UserResponse.from(user)));
+     }
+ 
+     @PostMapping("/login")
+-    public ResponseEntity<AuthResponse> login(@RequestBody Map<String, String> body) {
+-        String token = authService.login(body.get("username"), body.get("password"));
+-        User user = userRepository.findByUsername(body.get("username")).orElseThrow();
+-        return ResponseEntity.ok(new AuthResponse(token, UserResponse.from(user)));
++    public ApiResponse<AuthResponse> login(@Valid @RequestBody LoginRequest body, HttpServletRequest request) {
++        // getRemoteAddr(): X-Forwarded-For is client-controlled and deliberately not trusted for throttling.
++        return ApiResponse.of(authService.login(body.username(), body.password(), request.getRemoteAddr()));
+     }
+ 
+     @PostMapping("/google")
+-    public ResponseEntity<AuthResponse> loginWithGoogle(@RequestBody GoogleAuthRequest request) {
+-        AuthResponse response = authService.loginWithGoogle(request);
+-        return ResponseEntity.ok(response);
++    public ApiResponse<AuthResponse> loginWithGoogle(@RequestBody GoogleAuthRequest request) {
++        return ApiResponse.of(authService.loginWithGoogle(request));
+     }
+ 
+-    // Local handler (takes precedence over GlobalExceptionHandler, which is owned by B01-F1): fail closed with 503.
+-    @ExceptionHandler(GoogleLoginUnavailableException.class)
+-    public ResponseEntity<Map<String, String>> handleGoogleUnavailable(GoogleLoginUnavailableException ex) {
+-        return ResponseEntity.status(503).body(Map.of("message", ex.getMessage()));
++    @PostMapping("/refresh")
++    public ApiResponse<TokenPairResponse> refresh(@Valid @RequestBody RefreshTokenRequest body) {
++        return ApiResponse.of(authService.refresh(body.refreshToken()));
+     }
+ 
+     @PostMapping("/logout")
+-    public ResponseEntity<Void> logout(HttpServletRequest request) {
+-        String header = request.getHeader("Authorization");
+-        if (header != null && header.startsWith("Bearer ")) {
+-            authService.logout(header.substring(7));
+-        }
+-        return ResponseEntity.noContent().build();
++    public ApiResponse<Void> logout(@Valid @RequestBody RefreshTokenRequest body) {
++        authService.logout(body.refreshToken());
++        return ApiResponse.of(null);
+     }
+ 
+-}
++    @GetMapping("/me")
++    public ApiResponse<UserResponse> me(HttpServletRequest request) {
++        return ApiResponse.of(UserResponse.from(authGuard.requireUser(request)));
++    }
+ 
++    // Local handlers (checked before GlobalExceptionHandler). Both use the /api/v1 error contract.
++
++    /** B01-P1: fail closed when Google login is not configured / Google keys are unreachable. */
++    @ExceptionHandler(GoogleLoginUnavailableException.class)
++    public ResponseEntity<ApiError> handleGoogleUnavailable(GoogleLoginUnavailableException ex) {
++        return ResponseEntity.status(503).body(ApiError.of(ApiErrorCode.INTERNAL_ERROR, ex.getMessage()));
++    }
++
++    @ExceptionHandler(LoginThrottle.TooManyAttemptsException.class)
++    public ResponseEntity<ApiError> handleTooManyAttempts(LoginThrottle.TooManyAttemptsException ex) {
++        return ResponseEntity.status(ApiErrorCode.RATE_LIMITED.httpStatus())
++                .header("Retry-After", String.valueOf(ex.getRetryAfterSeconds()))
++                .body(ApiError.of(ApiErrorCode.RATE_LIMITED, ex.getMessage()));
++    }
++}
+diff --git a/backend/src/main/java/com/example/backend/controller/UserController.java b/backend/src/main/java/com/example/backend/controller/UserController.java
+index ceb8642..1f5eecb 100644
+--- a/backend/src/main/java/com/example/backend/controller/UserController.java
++++ b/backend/src/main/java/com/example/backend/controller/UserController.java
+@@ -1,7 +1,6 @@
+ package com.example.backend.controller;
+ 
+ import com.example.backend.dto.UserResponse;
+-import com.example.backend.entity.User;
+ import com.example.backend.security.AuthGuard;
+ import com.example.backend.service.UserService;
+ import org.springframework.beans.factory.annotation.Autowired;
+@@ -19,13 +18,6 @@ public class UserController {
+     @Autowired private UserService userService;
+     @Autowired private AuthGuard authGuard;
+ 
+-    /** The currently authenticated user's own profile. */
+-    @GetMapping("/me")
+-    public UserResponse me(HttpServletRequest request) {
+-        User user = authGuard.requireUser(request);
+-        return UserResponse.from(user);
+-    }
+-
+     /** Admin-only: list all users. */
+     @GetMapping
+     public List<UserResponse> getAllUsers(HttpServletRequest request) {
+diff --git a/backend/src/main/java/com/example/backend/dto/AuthResponse.java b/backend/src/main/java/com/example/backend/dto/AuthResponse.java
+index e748eee..b1f014d 100644
+--- a/backend/src/main/java/com/example/backend/dto/AuthResponse.java
++++ b/backend/src/main/java/com/example/backend/dto/AuthResponse.java
+@@ -1,11 +1,5 @@
+ package com.example.backend.dto;
+ 
+-public class AuthResponse {
+-    public String token;
+-    public UserResponse user;
+-
+-    public AuthResponse(String token, UserResponse user) {
+-        this.token = token;
+-        this.user = user;
+-    }
++/** Login / Google login result (B01-P2 contract). {@code expiresIn} = access-token lifetime in seconds. */
++public record AuthResponse(String accessToken, String refreshToken, long expiresIn, UserResponse user) {
+ }
+diff --git a/backend/src/main/java/com/example/backend/dto/LoginRequest.java b/backend/src/main/java/com/example/backend/dto/LoginRequest.java
+new file mode 100644
+index 0000000..5191199
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/dto/LoginRequest.java
+@@ -0,0 +1,8 @@
++package com.example.backend.dto;
++
++import jakarta.validation.constraints.NotBlank;
++
++public record LoginRequest(
++        @NotBlank(message = "Vui lòng nhập tên đăng nhập.") String username,
++        @NotBlank(message = "Vui lòng nhập mật khẩu.") String password) {
++}
+diff --git a/backend/src/main/java/com/example/backend/dto/RefreshTokenRequest.java b/backend/src/main/java/com/example/backend/dto/RefreshTokenRequest.java
+new file mode 100644
+index 0000000..9268ea9
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/dto/RefreshTokenRequest.java
+@@ -0,0 +1,7 @@
++package com.example.backend.dto;
++
++import jakarta.validation.constraints.NotBlank;
++
++/** Body of POST /api/v1/auth/refresh and /logout. */
++public record RefreshTokenRequest(@NotBlank(message = "Thiếu refresh token.") String refreshToken) {
++}
+diff --git a/backend/src/main/java/com/example/backend/dto/RegisterRequest.java b/backend/src/main/java/com/example/backend/dto/RegisterRequest.java
+new file mode 100644
+index 0000000..49a412e
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/dto/RegisterRequest.java
+@@ -0,0 +1,5 @@
++package com.example.backend.dto;
++
++/** Blank checks stay in AuthService.register (single combined Vietnamese message, unchanged behaviour). */
++public record RegisterRequest(String username, String email, String password) {
++}
+diff --git a/backend/src/main/java/com/example/backend/dto/TokenPairResponse.java b/backend/src/main/java/com/example/backend/dto/TokenPairResponse.java
+new file mode 100644
+index 0000000..4d545a0
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/dto/TokenPairResponse.java
+@@ -0,0 +1,5 @@
++package com.example.backend.dto;
++
++/** Result of POST /api/v1/auth/refresh. {@code expiresIn} = access-token lifetime in seconds. */
++public record TokenPairResponse(String accessToken, String refreshToken, long expiresIn) {
++}
+diff --git a/backend/src/main/java/com/example/backend/dto/UserResponse.java b/backend/src/main/java/com/example/backend/dto/UserResponse.java
+index 22592ca..1050115 100644
+--- a/backend/src/main/java/com/example/backend/dto/UserResponse.java
++++ b/backend/src/main/java/com/example/backend/dto/UserResponse.java
+@@ -11,6 +11,7 @@ public class UserResponse {
+     public String email;
+     public boolean active;
+     public List<String> roles;
++    public List<String> permissions = List.of(); // populated by B01-P3
+ 
+     // Note: password is never included in any API response.
+     public static UserResponse from(User u) {
+@@ -20,6 +21,7 @@ public class UserResponse {
+         r.email = u.getEmail();
+         r.active = u.isActive();
+         r.roles = u.getRoles().stream().map(Role::getName).collect(Collectors.toList());
++        r.permissions = List.of();
+         return r;
+     }
+ }
+diff --git a/backend/src/main/java/com/example/backend/entity/RefreshToken.java b/backend/src/main/java/com/example/backend/entity/RefreshToken.java
+new file mode 100644
+index 0000000..0c073bd
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/entity/RefreshToken.java
+@@ -0,0 +1,54 @@
++package com.example.backend.entity;
++
++import jakarta.persistence.*;
++
++import java.time.LocalDateTime;
++
++/** Persisted refresh token. Only the hex SHA-256 of the opaque token is stored, never the token itself. Times are UTC. */
++@Entity
++@Table(name = "refresh_tokens")
++public class RefreshToken {
++
++    @Id
++    @GeneratedValue(strategy = GenerationType.IDENTITY)
++    private Long id;
++
++    @Column(name = "user_id", nullable = false)
++    private Long userId;
++
++    @Column(name = "token_hash", nullable = false, unique = true, length = 64)
++    private String tokenHash;
++
++    @Column(name = "family_id", nullable = false, length = 36)
++    private String familyId;
++
++    @Column(name = "expires_at", nullable = false)
++    private LocalDateTime expiresAt;
++
++    @Column(nullable = false)
++    private boolean revoked = false;
++
++    @Column(name = "replaced_by_id")
++    private Long replacedById;
++
++    @Column(name = "created_at", nullable = false)
++    private LocalDateTime createdAt;
++
++    public RefreshToken() {}
++
++    public Long getId() { return id; }
++    public Long getUserId() { return userId; }
++    public void setUserId(Long userId) { this.userId = userId; }
++    public String getTokenHash() { return tokenHash; }
++    public void setTokenHash(String tokenHash) { this.tokenHash = tokenHash; }
++    public String getFamilyId() { return familyId; }
++    public void setFamilyId(String familyId) { this.familyId = familyId; }
++    public LocalDateTime getExpiresAt() { return expiresAt; }
++    public void setExpiresAt(LocalDateTime expiresAt) { this.expiresAt = expiresAt; }
++    public boolean isRevoked() { return revoked; }
++    public void setRevoked(boolean revoked) { this.revoked = revoked; }
++    public Long getReplacedById() { return replacedById; }
++    public void setReplacedById(Long replacedById) { this.replacedById = replacedById; }
++    public LocalDateTime getCreatedAt() { return createdAt; }
++    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
++}
+diff --git a/backend/src/main/java/com/example/backend/repository/RefreshTokenRepository.java b/backend/src/main/java/com/example/backend/repository/RefreshTokenRepository.java
+new file mode 100644
+index 0000000..16b9847
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/repository/RefreshTokenRepository.java
+@@ -0,0 +1,29 @@
++package com.example.backend.repository;
++
++import com.example.backend.entity.RefreshToken;
++import org.springframework.data.jpa.repository.JpaRepository;
++import org.springframework.data.jpa.repository.Modifying;
++import org.springframework.data.jpa.repository.Query;
++import org.springframework.data.repository.query.Param;
++
++import java.util.Optional;
++
++public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long> {
++
++    /** Lookup through the UNIQUE index on token_hash. */
++    Optional<RefreshToken> findByTokenHash(String tokenHash);
++
++    /** Atomic "claim": returns 1 only for the single caller that revoked a still-active token. */
++    @Modifying(clearAutomatically = true)
++    @Query("update RefreshToken t set t.revoked = true where t.id = :id and t.revoked = false")
++    int revokeIfActive(@Param("id") Long id);
++
++    @Modifying(clearAutomatically = true)
++    @Query("update RefreshToken t set t.replacedById = :newId where t.id = :id")
++    int markReplaced(@Param("id") Long id, @Param("newId") Long newId);
++
++    /** Reuse detection: revoke every token of the family. */
++    @Modifying(clearAutomatically = true)
++    @Query("update RefreshToken t set t.revoked = true where t.familyId = :familyId and t.revoked = false")
++    int revokeFamily(@Param("familyId") String familyId);
++}
+diff --git a/backend/src/main/java/com/example/backend/repository/UserRepository.java b/backend/src/main/java/com/example/backend/repository/UserRepository.java
+index d62c6fe..515591e 100644
+--- a/backend/src/main/java/com/example/backend/repository/UserRepository.java
++++ b/backend/src/main/java/com/example/backend/repository/UserRepository.java
+@@ -14,6 +14,9 @@ public interface UserRepository extends JpaRepository<User, Long> {
+ 
+     Optional<User> findByGoogleSub(String googleSub);
+ 
++    /** Cheap per-request check used by AuthInterceptor: no entity, no roles loaded. */
++    boolean existsByIdAndActiveTrue(Long id);
++
+     boolean existsByUsername(String username);
+ 
+     boolean existsByEmail(String email);
+diff --git a/backend/src/main/java/com/example/backend/security/AuthInterceptor.java b/backend/src/main/java/com/example/backend/security/AuthInterceptor.java
+index a5460bf..38b2362 100644
+--- a/backend/src/main/java/com/example/backend/security/AuthInterceptor.java
++++ b/backend/src/main/java/com/example/backend/security/AuthInterceptor.java
+@@ -1,8 +1,8 @@
+ package com.example.backend.security;
+ 
+-import com.example.backend.entity.Role;
+-import com.example.backend.entity.User;
+ import com.example.backend.repository.UserRepository;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
+ import org.springframework.stereotype.Component;
+ import org.springframework.web.servlet.HandlerInterceptor;
+ 
+@@ -10,22 +10,23 @@ import jakarta.servlet.http.HttpServletRequest;
+ import jakarta.servlet.http.HttpServletResponse;
+ 
+ /**
+- * Reads the "Authorization: Bearer <token>" header, resolves it to a real
+- * {@link User} row via {@link AuthTokenStore}, and attaches a {@link CurrentUser}
+- * to the request. Endpoints that require authentication/authorization check
+- * request.getAttribute("currentUser") - the frontend's claimed userId/role is
+- * never trusted for anything security-sensitive.
++ * Reads "Authorization: Bearer <jwt>", verifies signature + expiry, and attaches a {@link CurrentUser} to the request.
++ * Deactivated or deleted users are rejected with one cheap indexed lookup (exists by id and is_active) - the full
++ * User entity (with its EAGER roles) is NOT loaded; roles come from the token claims.
++ * Resolution only: an invalid/absent token simply leaves no CurrentUser and the endpoint (AuthGuard) answers 401.
+  */
+ @Component
+ public class AuthInterceptor implements HandlerInterceptor {
+ 
+     public static final String REQUEST_ATTR = "currentUser";
+ 
+-    private final AuthTokenStore tokenStore;
++    private static final Logger log = LoggerFactory.getLogger(AuthInterceptor.class);
++
++    private final JwtService jwtService;
+     private final UserRepository userRepository;
+ 
+-    public AuthInterceptor(AuthTokenStore tokenStore, UserRepository userRepository) {
+-        this.tokenStore = tokenStore;
++    public AuthInterceptor(JwtService jwtService, UserRepository userRepository) {
++        this.jwtService = jwtService;
+         this.userRepository = userRepository;
+     }
+ 
+@@ -33,14 +34,16 @@ public class AuthInterceptor implements HandlerInterceptor {
+     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
+         String header = request.getHeader("Authorization");
+         if (header != null && header.startsWith("Bearer ")) {
+-            String token = header.substring(7);
+-            Long userId = tokenStore.resolveUserId(token);
+-            if (userId != null) {
+-                User user = userRepository.findById(userId).orElse(null);
+-                if (user != null && user.isActive()) {
+-                    boolean isAdmin = user.hasRole(Role.ADMIN);
+-                    request.setAttribute(REQUEST_ATTR, new CurrentUser(user.getId(), isAdmin));
++            String token = header.substring(7).trim();
++            try {
++                CurrentUser current = jwtService.parse(token);
++                if (userRepository.existsByIdAndActiveTrue(current.getUserId())) {
++                    request.setAttribute(REQUEST_ATTR, current);
+                 }
++            } catch (RuntimeException e) {
++                // Invalid, tampered, unsigned, expired or legacy (non-JWT) token: treated as unauthenticated.
++                // The token itself is never logged.
++                log.debug("Rejected bearer token: {}", e.getClass().getSimpleName());
+             }
+         }
+         return true; // resolution only; individual controllers enforce requirements
+diff --git a/backend/src/main/java/com/example/backend/security/AuthTokenStore.java b/backend/src/main/java/com/example/backend/security/AuthTokenStore.java
+deleted file mode 100644
+index 8f78607..0000000
+--- a/backend/src/main/java/com/example/backend/security/AuthTokenStore.java
++++ /dev/null
+@@ -1,39 +0,0 @@
+-package com.example.backend.security;
+-
+-import org.springframework.stereotype.Component;
+-
+-import java.util.UUID;
+-import java.util.concurrent.ConcurrentHashMap;
+-
+-/**
+- * Minimal in-memory session/token store.
+- *
+- * This is intentionally simple (no JWT library, no external session store) to
+- * avoid over-engineering the first version, while still giving the backend a
+- * real, server-verified notion of "who is calling this endpoint" so that
+- * authorization is never left to what the frontend claims about itself.
+- *
+- * A production system would replace this with signed JWTs or a persisted
+- * session table, but the contract (opaque token -> userId, verified on every
+- * protected request) stays the same.
+- */
+-@Component
+-public class AuthTokenStore {
+-
+-    private final ConcurrentHashMap<String, Long> tokenToUserId = new ConcurrentHashMap<>();
+-
+-    public String issueToken(Long userId) {
+-        String token = UUID.randomUUID().toString();
+-        tokenToUserId.put(token, userId);
+-        return token;
+-    }
+-
+-    public Long resolveUserId(String token) {
+-        if (token == null) return null;
+-        return tokenToUserId.get(token);
+-    }
+-
+-    public void revoke(String token) {
+-        if (token != null) tokenToUserId.remove(token);
+-    }
+-}
+diff --git a/backend/src/main/java/com/example/backend/security/CurrentUser.java b/backend/src/main/java/com/example/backend/security/CurrentUser.java
+index 15be970..095e967 100644
+--- a/backend/src/main/java/com/example/backend/security/CurrentUser.java
++++ b/backend/src/main/java/com/example/backend/security/CurrentUser.java
+@@ -1,15 +1,26 @@
+ package com.example.backend.security;
+ 
+-/** Resolved identity for the current request, attached by {@link AuthInterceptor}. */
++import com.example.backend.entity.Role;
++
++import java.util.List;
++
++/**
++ * Resolved identity for the current request, attached by {@link AuthInterceptor}.
++ * roles/permissions come from the verified access token (valid for at most the access-token TTL).
++ */
+ public class CurrentUser {
+     private final Long userId;
+-    private final boolean admin;
++    private final List<String> roles;
++    private final List<String> permissions;
+ 
+-    public CurrentUser(Long userId, boolean admin) {
++    public CurrentUser(Long userId, List<String> roles, List<String> permissions) {
+         this.userId = userId;
+-        this.admin = admin;
++        this.roles = roles == null ? List.of() : List.copyOf(roles);
++        this.permissions = permissions == null ? List.of() : List.copyOf(permissions);
+     }
+ 
+     public Long getUserId() { return userId; }
+-    public boolean isAdmin() { return admin; }
++    public List<String> getRoles() { return roles; }
++    public List<String> getPermissions() { return permissions; }
++    public boolean isAdmin() { return roles.contains(Role.ADMIN); }
+ }
+diff --git a/backend/src/main/java/com/example/backend/security/JwtService.java b/backend/src/main/java/com/example/backend/security/JwtService.java
+new file mode 100644
+index 0000000..79d6cd4
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/security/JwtService.java
+@@ -0,0 +1,94 @@
++package com.example.backend.security;
++
++import com.example.backend.entity.Role;
++import com.example.backend.entity.User;
++import io.jsonwebtoken.Claims;
++import io.jsonwebtoken.JwtException;
++import io.jsonwebtoken.Jwts;
++import io.jsonwebtoken.security.Keys;
++import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.beans.factory.annotation.Value;
++import org.springframework.stereotype.Component;
++
++import javax.crypto.SecretKey;
++import java.nio.charset.StandardCharsets;
++import java.time.Clock;
++import java.util.Date;
++import java.util.List;
++import java.util.UUID;
++
++/**
++ * Issues and verifies signed (HS256) access tokens. Claims: sub = user id, roles, permissions (empty until B01-P3),
++ * iat, exp, jti. The secret comes from JWT_SECRET; the application FAILS TO START when it is missing or shorter
++ * than 32 bytes. Tokens/jti are never logged.
++ */
++@Component
++public class JwtService {
++
++    public static final int MIN_SECRET_BYTES = 32;
++
++    private final SecretKey key;
++    private final long accessTtlSeconds;
++    private final Clock clock;
++
++    @Autowired
++    public JwtService(@Value("${ecogreen.jwt.secret:}") String secret,
++                      @Value("${ecogreen.jwt.access-ttl-seconds:900}") long accessTtlSeconds) {
++        this(secret, accessTtlSeconds, Clock.systemUTC());
++    }
++
++    public JwtService(String secret, long accessTtlSeconds, Clock clock) {
++        byte[] bytes = secret == null ? new byte[0] : secret.getBytes(StandardCharsets.UTF_8);
++        if (bytes.length < MIN_SECRET_BYTES) {
++            throw new IllegalStateException("JWT_SECRET is missing or too short: set the JWT_SECRET environment variable "
++                    + "to at least " + MIN_SECRET_BYTES + " bytes of random data (e.g. `openssl rand -base64 48`).");
++        }
++        if (accessTtlSeconds <= 0) {
++            throw new IllegalStateException("ecogreen.jwt.access-ttl-seconds must be positive.");
++        }
++        this.key = Keys.hmacShaKeyFor(bytes);
++        this.accessTtlSeconds = accessTtlSeconds;
++        this.clock = clock;
++    }
++
++    public long getAccessTtlSeconds() {
++        return accessTtlSeconds;
++    }
++
++    public String issueAccessToken(User user) {
++        List<String> roles = user.getRoles().stream().map(Role::getName).sorted().toList();
++        Date now = Date.from(clock.instant());
++        Date exp = Date.from(clock.instant().plusSeconds(accessTtlSeconds));
++        return Jwts.builder()
++                .subject(String.valueOf(user.getId()))
++                .claim("roles", roles)
++                .claim("permissions", List.of()) // populated by B01-P3
++                .issuedAt(now)
++                .expiration(exp)
++                .id(UUID.randomUUID().toString())
++                .signWith(key, Jwts.SIG.HS256)
++                .compact();
++    }
++
++    /**
++     * Verifies signature and expiry and returns the identity in the token.
++     * @throws JwtException (or IllegalArgumentException) when the token is malformed, tampered, unsigned or expired
++     */
++    public CurrentUser parse(String token) {
++        Claims claims = Jwts.parser()
++                .verifyWith(key)
++                .clock(() -> Date.from(clock.instant()))
++                .build()
++                .parseSignedClaims(token)
++                .getPayload();
++        Long userId = Long.valueOf(claims.getSubject());
++        return new CurrentUser(userId, stringList(claims.get("roles")), stringList(claims.get("permissions")));
++    }
++
++    private static List<String> stringList(Object value) {
++        if (value instanceof List<?> list) {
++            return list.stream().filter(String.class::isInstance).map(String.class::cast).toList();
++        }
++        return List.of();
++    }
++}
+diff --git a/backend/src/main/java/com/example/backend/security/LoginThrottle.java b/backend/src/main/java/com/example/backend/security/LoginThrottle.java
+new file mode 100644
+index 0000000..8fbfc5e
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/security/LoginThrottle.java
+@@ -0,0 +1,71 @@
++package com.example.backend.security;
++
++import org.springframework.beans.factory.annotation.Value;
++import org.springframework.stereotype.Component;
++
++import java.time.Clock;
++import java.util.Locale;
++import java.util.concurrent.ConcurrentHashMap;
++
++/**
++ * Minimal in-memory failed-login throttle keyed by username + client IP: after {@code maxFailures} failures inside the
++ * window, further attempts get 429 RATE_LIMITED until the window ends. Per instance only (no Redis by design);
++ * a successful login clears the counter. Counts unknown usernames too, so it does not reveal which accounts exist.
++ */
++@Component
++public class LoginThrottle {
++
++    public static class TooManyAttemptsException extends RuntimeException {
++        private final long retryAfterSeconds;
++        public TooManyAttemptsException(long retryAfterSeconds) {
++            super("Bạn đã thử đăng nhập sai quá nhiều lần. Vui lòng thử lại sau ít phút.");
++            this.retryAfterSeconds = retryAfterSeconds;
++        }
++        public long getRetryAfterSeconds() { return retryAfterSeconds; }
++    }
++
++    private static final class Entry { int failures; long windowStartMs; }
++
++    private final ConcurrentHashMap<String, Entry> entries = new ConcurrentHashMap<>();
++    private final int maxFailures;
++    private final long windowMs;
++    private final Clock clock;
++
++    public LoginThrottle(@Value("${ecogreen.auth.max-failed-logins:5}") int maxFailures,
++                         @Value("${ecogreen.auth.lockout-window-seconds:900}") long windowSeconds) {
++        this(maxFailures, windowSeconds, Clock.systemUTC());
++    }
++
++    public LoginThrottle(int maxFailures, long windowSeconds, Clock clock) {
++        this.maxFailures = maxFailures;
++        this.windowMs = windowSeconds * 1000;
++        this.clock = clock;
++    }
++
++    private static String key(String username, String ip) {
++        return (username == null ? "" : username.trim().toLowerCase(Locale.ROOT)) + "|" + ip;
++    }
++
++    /** @throws TooManyAttemptsException when this username+IP is currently locked out */
++    public void checkAllowed(String username, String ip) {
++        Entry e = entries.get(key(username, ip));
++        long now = clock.millis();
++        if (e != null && now - e.windowStartMs < windowMs && e.failures >= maxFailures) {
++            throw new TooManyAttemptsException(Math.max(1, (e.windowStartMs + windowMs - now + 999) / 1000));
++        }
++    }
++
++    public void recordFailure(String username, String ip) {
++        long now = clock.millis();
++        if (entries.size() > 10_000) entries.values().removeIf(x -> now - x.windowStartMs >= windowMs); // bound memory
++        entries.compute(key(username, ip), (k, e) -> {
++            if (e == null || now - e.windowStartMs >= windowMs) { e = new Entry(); e.windowStartMs = now; }
++            e.failures++;
++            return e;
++        });
++    }
++
++    public void recordSuccess(String username, String ip) {
++        entries.remove(key(username, ip));
++    }
++}
+diff --git a/backend/src/main/java/com/example/backend/security/RefreshTokenService.java b/backend/src/main/java/com/example/backend/security/RefreshTokenService.java
+new file mode 100644
+index 0000000..b7e3cd1
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/security/RefreshTokenService.java
+@@ -0,0 +1,135 @@
++package com.example.backend.security;
++
++import com.example.backend.entity.RefreshToken;
++import com.example.backend.entity.User;
++import com.example.backend.exception.UnauthorizedException;
++import com.example.backend.repository.RefreshTokenRepository;
++import com.example.backend.repository.UserRepository;
++import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.beans.factory.annotation.Value;
++import org.springframework.stereotype.Service;
++import org.springframework.transaction.annotation.Transactional;
++
++import java.nio.charset.StandardCharsets;
++import java.security.MessageDigest;
++import java.security.NoSuchAlgorithmException;
++import java.security.SecureRandom;
++import java.time.Clock;
++import java.time.LocalDateTime;
++import java.util.Base64;
++import java.util.HexFormat;
++import java.util.UUID;
++
++/**
++ * Opaque refresh tokens: 64 random bytes (URL-safe Base64), returned once, stored only as hex SHA-256.
++ * Each use ROTATES the token (old one revoked, new one in the same family). Presenting an already-revoked token
++ * is treated as theft: the whole family is revoked and the request is rejected with 401.
++ * The raw token and its hash are never logged.
++ */
++@Service
++public class RefreshTokenService {
++
++    static final String INVALID = "Phiên đăng nhập không hợp lệ hoặc đã hết hạn. Vui lòng đăng nhập lại.";
++    private static final int MAX_TOKEN_LENGTH = 256;
++    private static final SecureRandom RANDOM = new SecureRandom();
++
++    public record Rotated(String refreshToken, User user) {}
++
++    private final RefreshTokenRepository tokens;
++    private final UserRepository users;
++    private final long ttlDays;
++    private final Clock clock;
++
++    @Autowired
++    public RefreshTokenService(RefreshTokenRepository tokens, UserRepository users,
++                               @Value("${ecogreen.jwt.refresh-ttl-days:14}") long ttlDays) {
++        this(tokens, users, ttlDays, Clock.systemUTC());
++    }
++
++    public RefreshTokenService(RefreshTokenRepository tokens, UserRepository users, long ttlDays, Clock clock) {
++        this.tokens = tokens;
++        this.users = users;
++        this.ttlDays = ttlDays;
++        this.clock = clock;
++    }
++
++    /** Starts a new token family (login). Returns the raw token - the only time it is ever visible. */
++    @Transactional
++    public String issueNewFamily(User user) {
++        return create(user.getId(), UUID.randomUUID().toString()).raw();
++    }
++
++    /** Validates + rotates. noRollbackFor: the family revocation on reuse must be committed even though we throw. */
++    @Transactional(noRollbackFor = UnauthorizedException.class)
++    public Rotated rotate(String rawToken) {
++        RefreshToken current = lookup(rawToken);
++
++        if (current.isRevoked()) { // reuse of an already-rotated/revoked token
++            tokens.revokeFamily(current.getFamilyId());
++            throw new UnauthorizedException(INVALID);
++        }
++        if (current.getExpiresAt().isBefore(now())) {
++            throw new UnauthorizedException(INVALID);
++        }
++        // Atomically claim the token; if another request already did, this is a concurrent reuse.
++        if (tokens.revokeIfActive(current.getId()) == 0) {
++            tokens.revokeFamily(current.getFamilyId());
++            throw new UnauthorizedException(INVALID);
++        }
++        User user = users.findById(current.getUserId()).orElse(null);
++        if (user == null || !user.isActive()) {
++            tokens.revokeFamily(current.getFamilyId());
++            throw new UnauthorizedException(INVALID);
++        }
++
++        Created next = create(current.getUserId(), current.getFamilyId());
++        tokens.markReplaced(current.getId(), next.id());
++        return new Rotated(next.raw(), user);
++    }
++
++    /** Logout: revoke exactly this token. Idempotent; unknown/invalid tokens are ignored. */
++    @Transactional
++    public void revoke(String rawToken) {
++        if (rawToken == null || rawToken.isBlank() || rawToken.length() > MAX_TOKEN_LENGTH) return;
++        tokens.findByTokenHash(sha256Hex(rawToken)).ifPresent(t -> {
++            if (!t.isRevoked()) tokens.revokeIfActive(t.getId());
++        });
++    }
++
++    private RefreshToken lookup(String rawToken) {
++        if (rawToken == null || rawToken.isBlank() || rawToken.length() > MAX_TOKEN_LENGTH) {
++            throw new UnauthorizedException(INVALID);
++        }
++        return tokens.findByTokenHash(sha256Hex(rawToken)).orElseThrow(() -> new UnauthorizedException(INVALID));
++    }
++
++    private record Created(Long id, String raw) {}
++
++    private Created create(Long userId, String familyId) {
++        byte[] bytes = new byte[64];
++        RANDOM.nextBytes(bytes);
++        String raw = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
++
++        RefreshToken entity = new RefreshToken();
++        entity.setUserId(userId);
++        entity.setTokenHash(sha256Hex(raw));
++        entity.setFamilyId(familyId);
++        entity.setExpiresAt(now().plusDays(ttlDays));
++        entity.setCreatedAt(now());
++        RefreshToken saved = tokens.save(entity);
++        return new Created(saved.getId(), raw);
++    }
++
++    private LocalDateTime now() {
++        return LocalDateTime.now(clock); // clock is UTC
++    }
++
++    public static String sha256Hex(String value) {
++        try {
++            byte[] digest = MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));
++            return HexFormat.of().formatHex(digest);
++        } catch (NoSuchAlgorithmException e) {
++            throw new IllegalStateException("SHA-256 not available", e);
++        }
++    }
++}
+diff --git a/backend/src/main/java/com/example/backend/service/AuthService.java b/backend/src/main/java/com/example/backend/service/AuthService.java
+index 81710ab..faad874 100644
+--- a/backend/src/main/java/com/example/backend/service/AuthService.java
++++ b/backend/src/main/java/com/example/backend/service/AuthService.java
+@@ -2,6 +2,7 @@ package com.example.backend.service;
+ 
+ import com.example.backend.dto.AuthResponse;
+ import com.example.backend.dto.GoogleAuthRequest;
++import com.example.backend.dto.TokenPairResponse;
+ import com.example.backend.dto.UserResponse;
+ import com.example.backend.entity.Role;
+ import com.example.backend.entity.User;
+@@ -11,7 +12,9 @@ import com.example.backend.exception.GoogleLoginUnavailableException;
+ import com.example.backend.exception.UnauthorizedException;
+ import com.example.backend.repository.RoleRepository;
+ import com.example.backend.repository.UserRepository;
+-import com.example.backend.security.AuthTokenStore;
++import com.example.backend.security.JwtService;
++import com.example.backend.security.LoginThrottle;
++import com.example.backend.security.RefreshTokenService;
+ import com.example.backend.security.GoogleIdentity;
+ import com.example.backend.security.GoogleIdentityVerifier;
+ import org.springframework.beans.factory.annotation.Autowired;
+@@ -26,11 +29,17 @@ import java.util.UUID;
+ public class AuthService {
+ 
+     private static final String GOOGLE_AUTH_FAILED = "Xác thực Google không thành công.";
++    private static final String BAD_CREDENTIALS = "Tên đăng nhập hoặc mật khẩu không chính xác.";
++
++    /** Valid BCrypt hash of a random value, built once; lets login spend the same time for unknown usernames. */
++    private volatile String dummyHash;
+ 
+     @Autowired private UserRepository userRepository;
+     @Autowired private RoleRepository roleRepository;
+     @Autowired private PasswordHasher passwordHasher;
+-    @Autowired private AuthTokenStore tokenStore;
++    @Autowired private JwtService jwtService;
++    @Autowired private RefreshTokenService refreshTokenService;
++    @Autowired private LoginThrottle loginThrottle;
+     @Autowired private CartService cartService;
+     @Autowired private GoogleIdentityVerifier googleVerifier;
+ 
+@@ -61,18 +70,54 @@ public class AuthService {
+         return saved;
+     }
+ 
+-    /** Returns a fresh opaque bearer token for the given credentials. */
+-    public String login(String username, String password) {
+-        User user = userRepository.findByUsername(username)
+-                .orElseThrow(() -> new UnauthorizedException("Tên đăng nhập hoặc mật khẩu không chính xác."));
++    /**
++     * Username/password login. One user lookup; unknown username and wrong password are indistinguishable (same message,
++     * and a BCrypt comparison is always performed so timing does not reveal which usernames exist). The "locked"
++     * message is only revealed after the correct password. Failed attempts are throttled per username + client IP.
++     */
++    public AuthResponse login(String username, String password, String clientIp) {
++        if (username == null || username.isBlank() || password == null || password.isEmpty()) {
++            throw new UnauthorizedException(BAD_CREDENTIALS);
++        }
++        loginThrottle.checkAllowed(username, clientIp);
+ 
++        User user = userRepository.findByUsername(username).orElse(null);
++        boolean passwordOk = passwordHasher.matches(password, user != null ? user.getPassword() : dummyHash());
++        if (user == null || !passwordOk) {
++            loginThrottle.recordFailure(username, clientIp);
++            throw new UnauthorizedException(BAD_CREDENTIALS);
++        }
+         if (!user.isActive()) {
+             throw new UnauthorizedException("Tài khoản này đã bị khóa. Vui lòng liên hệ quản trị viên.");
+         }
+-        if (!passwordHasher.matches(password, user.getPassword())) {
+-            throw new UnauthorizedException("Tên đăng nhập hoặc mật khẩu không chính xác.");
++        loginThrottle.recordSuccess(username, clientIp);
++        return issueSession(user);
++    }
++
++    /** Rotates the refresh token (reuse of a revoked one revokes the whole family) and issues a new access token. */
++    public TokenPairResponse refresh(String refreshToken) {
++        RefreshTokenService.Rotated rotated = refreshTokenService.rotate(refreshToken);
++        return new TokenPairResponse(jwtService.issueAccessToken(rotated.user()), rotated.refreshToken(),
++                jwtService.getAccessTtlSeconds());
++    }
++
++    /** Revokes exactly the given refresh token; the access token simply expires. */
++    public void logout(String refreshToken) {
++        refreshTokenService.revoke(refreshToken);
++    }
++
++    private AuthResponse issueSession(User user) {
++        return new AuthResponse(jwtService.issueAccessToken(user), refreshTokenService.issueNewFamily(user),
++                jwtService.getAccessTtlSeconds(), UserResponse.from(user));
++    }
++
++    private String dummyHash() {
++        String h = dummyHash;
++        if (h == null) {
++            h = passwordHasher.hash(UUID.randomUUID().toString());
++            dummyHash = h;
+         }
+-        return tokenStore.issueToken(user.getId());
++        return h;
+     }
+ 
+     /**
+@@ -139,8 +184,7 @@ public class AuthService {
+             }
+         }
+ 
+-        String token = tokenStore.issueToken(user.getId());
+-        return new AuthResponse(token, UserResponse.from(user));
++        return issueSession(user);
+     }
+ 
+     private void requireActive(User user) {
+@@ -172,7 +216,4 @@ public class AuthService {
+         return candidate;
+     }
+ 
+-    public void logout(String token) {
+-        tokenStore.revoke(token);
+-    }
+ }
+diff --git a/backend/src/main/resources/application.properties b/backend/src/main/resources/application.properties
+index 9c610cf..4378c04 100644
+--- a/backend/src/main/resources/application.properties
++++ b/backend/src/main/resources/application.properties
+@@ -12,3 +12,12 @@ spring.jpa.hibernate.ddl-auto=update
+ spring.jpa.open-in-view=true
+ 
+ server.port=8081
++
++# ── B01-P2: JWT / refresh tokens ──────────────────────────────────────
++# JWT_SECRET (>= 32 bytes) is REQUIRED: the application refuses to start without it. No default is provided on purpose.
++ecogreen.jwt.secret=${JWT_SECRET:}
++ecogreen.jwt.access-ttl-seconds=900
++ecogreen.jwt.refresh-ttl-days=14
++# Failed-login throttle (per username + client IP)
++ecogreen.auth.max-failed-logins=5
++ecogreen.auth.lockout-window-seconds=900
+diff --git a/backend/src/main/resources/db/migration/V3__refresh_tokens.sql b/backend/src/main/resources/db/migration/V3__refresh_tokens.sql
+new file mode 100644
+index 0000000..43d931a
+--- /dev/null
++++ b/backend/src/main/resources/db/migration/V3__refresh_tokens.sql
+@@ -0,0 +1,22 @@
++-- B01-P2: persisted refresh tokens (only the SHA-256 hash of the opaque token is stored).
++--
++-- LEGACY DATA IMPACT:        New table, no existing rows. Existing sessions (random UUID tokens held in memory by the
++--                            removed AuthTokenStore) become invalid: every user must log in once after deployment.
++-- NULLABILITY / CONSTRAINTS: token_hash is UNIQUE (hex SHA-256, 64 chars); user_id references users(id) ON DELETE CASCADE.
++-- DATA-LOSS / ROLLBACK RISK: Rollback = DROP TABLE refresh_tokens (logs everybody out; no business data lost).
++-- EMPTY DATABASE:            Yes - requires "users" to exist first.
++-- EXISTING DATABASE:         Yes - idempotent (IF NOT EXISTS); safe if ddl-auto=update already created the table.
++
++CREATE TABLE IF NOT EXISTS refresh_tokens (
++    id             BIGSERIAL PRIMARY KEY,
++    user_id        BIGINT      NOT NULL REFERENCES users (id) ON DELETE CASCADE,
++    token_hash     VARCHAR(64) NOT NULL UNIQUE,
++    family_id      VARCHAR(36) NOT NULL,
++    expires_at     TIMESTAMP   NOT NULL,
++    revoked        BOOLEAN     NOT NULL DEFAULT false,
++    replaced_by_id BIGINT,
++    created_at     TIMESTAMP   NOT NULL DEFAULT now()
++);
++
++CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens (user_id);
++CREATE INDEX IF NOT EXISTS idx_refresh_tokens_family ON refresh_tokens (family_id);
+diff --git a/backend/src/test/java/com/example/backend/BackendApplicationTests.java b/backend/src/test/java/com/example/backend/BackendApplicationTests.java
+index e6511ba..c7b9f18 100644
+--- a/backend/src/test/java/com/example/backend/BackendApplicationTests.java
++++ b/backend/src/test/java/com/example/backend/BackendApplicationTests.java
+@@ -2,8 +2,10 @@ package com.example.backend;
+ 
+ import org.junit.jupiter.api.Test;
+ import org.springframework.boot.test.context.SpringBootTest;
++import org.springframework.test.context.TestPropertySource;
+ 
+ @SpringBootTest
++@TestPropertySource(locations = "classpath:test-jwt.properties") // TEST-ONLY JWT secret (JWT_SECRET is mandatory at startup)
+ class BackendApplicationTests {
+ 
+ 	@Test
+diff --git a/backend/src/test/java/com/example/backend/controller/AuthControllerTest.java b/backend/src/test/java/com/example/backend/controller/AuthControllerTest.java
+new file mode 100644
+index 0000000..2eb5c20
+--- /dev/null
++++ b/backend/src/test/java/com/example/backend/controller/AuthControllerTest.java
+@@ -0,0 +1,206 @@
++package com.example.backend.controller;
++
++import com.example.backend.dto.AuthResponse;
++import com.example.backend.dto.TokenPairResponse;
++import com.example.backend.dto.UserResponse;
++import com.example.backend.entity.Role;
++import com.example.backend.entity.User;
++import com.example.backend.exception.GlobalExceptionHandler;
++import com.example.backend.exception.GoogleLoginUnavailableException;
++import com.example.backend.exception.UnauthorizedException;
++import com.example.backend.repository.UserRepository;
++import com.example.backend.security.AuthGuard;
++import com.example.backend.security.AuthInterceptor;
++import com.example.backend.security.JwtService;
++import com.example.backend.security.LoginThrottle;
++import com.example.backend.security.TestJwt;
++import com.example.backend.service.AuthService;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++import org.springframework.http.MediaType;
++import org.springframework.test.util.ReflectionTestUtils;
++import org.springframework.test.web.servlet.MockMvc;
++import org.springframework.test.web.servlet.MvcResult;
++import org.springframework.test.web.servlet.setup.MockMvcBuilders;
++import org.springframework.web.bind.annotation.RequestMapping;
++
++import java.util.HashSet;
++import java.util.Optional;
++import java.util.Set;
++
++import static org.junit.jupiter.api.Assertions.assertArrayEquals;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.ArgumentMatchers.anyString;
++import static org.mockito.ArgumentMatchers.eq;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.when;
++import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
++import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
++import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
++import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
++import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
++
++/** B01-P2: the six /api/v1/auth endpoints through standalone MockMvc (real handler, interceptor, guard, JwtService). */
++class AuthControllerTest {
++
++    private AuthService authService;
++    private UserRepository userRepository;
++    private JwtService jwt;
++    private MockMvc mvc;
++
++    private static User user() {
++        User u = new User();
++        u.setId(3L);
++        u.setUsername("alice");
++        u.setEmail("alice@example.com");
++        u.setRoles(new HashSet<>(Set.of(new Role(1L, Role.USER))));
++        return u;
++    }
++
++    @BeforeEach
++    void setUp() {
++        authService = mock(AuthService.class);
++        userRepository = mock(UserRepository.class);
++        jwt = new JwtService(TestJwt.SECRET, 900);
++
++        AuthGuard guard = new AuthGuard();
++        ReflectionTestUtils.setField(guard, "userRepository", userRepository);
++        AuthController controller = new AuthController();
++        ReflectionTestUtils.setField(controller, "authService", authService);
++        ReflectionTestUtils.setField(controller, "authGuard", guard);
++
++        mvc = MockMvcBuilders.standaloneSetup(controller)
++                .setControllerAdvice(new GlobalExceptionHandler())
++                .addInterceptors(new AuthInterceptor(jwt, userRepository))
++                .build();
++    }
++
++    @Test
++    void controller_isMountedOnlyUnderApiV1Auth() {
++        assertArrayEquals(new String[]{"/api/v1/auth"}, AuthController.class.getAnnotation(RequestMapping.class).value());
++    }
++
++    @Test
++    void login_returnsEnvelopeWithTokensAndUser() throws Exception {
++        UserResponse ur = UserResponse.from(user());
++        when(authService.login(eq("alice"), eq("pw"), anyString()))
++                .thenReturn(new AuthResponse("acc", "ref", 900, ur));
++
++        MvcResult result = mvc.perform(post("/api/v1/auth/login").contentType(MediaType.APPLICATION_JSON)
++                        .content("{\"username\":\"alice\",\"password\":\"pw\"}"))
++                .andExpect(status().isOk())
++                .andExpect(jsonPath("$.data.accessToken").value("acc"))
++                .andExpect(jsonPath("$.data.refreshToken").value("ref"))
++                .andExpect(jsonPath("$.data.expiresIn").value(900))
++                .andExpect(jsonPath("$.data.user.username").value("alice"))
++                .andExpect(jsonPath("$.data.user.roles[0]").value("USER"))
++                .andExpect(jsonPath("$.data.user.permissions").isArray())
++                .andReturn();
++        assertTrue(result.getResponse().getContentAsString().contains("\"meta\":null"));
++        assertTrue(!result.getResponse().getContentAsString().contains("password"));
++    }
++
++    @Test
++    void login_missingPassword_isValidationError_andBadCredentialsIs401() throws Exception {
++        mvc.perform(post("/api/v1/auth/login").contentType(MediaType.APPLICATION_JSON).content("{\"username\":\"alice\"}"))
++                .andExpect(status().isBadRequest())
++                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"))
++                .andExpect(jsonPath("$.error.fields.password").exists());
++
++        when(authService.login(anyString(), anyString(), anyString()))
++                .thenThrow(new UnauthorizedException("Tên đăng nhập hoặc mật khẩu không chính xác."));
++        mvc.perform(post("/api/v1/auth/login").contentType(MediaType.APPLICATION_JSON)
++                        .content("{\"username\":\"alice\",\"password\":\"bad\"}"))
++                .andExpect(status().isUnauthorized())
++                .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"));
++    }
++
++    @Test
++    void login_throttled_returns429RateLimitedWithRetryAfter() throws Exception {
++        when(authService.login(anyString(), anyString(), anyString()))
++                .thenThrow(new LoginThrottle.TooManyAttemptsException(120));
++
++        mvc.perform(post("/api/v1/auth/login").contentType(MediaType.APPLICATION_JSON)
++                        .content("{\"username\":\"alice\",\"password\":\"bad\"}"))
++                .andExpect(status().isTooManyRequests())
++                .andExpect(header().string("Retry-After", "120"))
++                .andExpect(jsonPath("$.error.code").value("RATE_LIMITED"));
++    }
++
++    @Test
++    void register_returns201WithUserEnvelope() throws Exception {
++        when(authService.register("alice", "alice@example.com", "pw")).thenReturn(user());
++
++        mvc.perform(post("/api/v1/auth/register").contentType(MediaType.APPLICATION_JSON)
++                        .content("{\"username\":\"alice\",\"email\":\"alice@example.com\",\"password\":\"pw\"}"))
++                .andExpect(status().isCreated())
++                .andExpect(jsonPath("$.data.username").value("alice"))
++                .andExpect(jsonPath("$.data.email").value("alice@example.com"))
++                .andExpect(jsonPath("$.data.password").doesNotExist());
++    }
++
++    @Test
++    void google_returnsSameShapeAsLogin_andUnconfiguredIs503() throws Exception {
++        when(authService.loginWithGoogle(any())).thenReturn(new AuthResponse("acc", "ref", 900, UserResponse.from(user())));
++        mvc.perform(post("/api/v1/auth/google").contentType(MediaType.APPLICATION_JSON).content("{\"idToken\":\"x.y.z\"}"))
++                .andExpect(status().isOk())
++                .andExpect(jsonPath("$.data.accessToken").value("acc"));
++
++        when(authService.loginWithGoogle(any())).thenThrow(new GoogleLoginUnavailableException("not configured"));
++        mvc.perform(post("/api/v1/auth/google").contentType(MediaType.APPLICATION_JSON).content("{\"idToken\":\"x.y.z\"}"))
++                .andExpect(status().isServiceUnavailable())
++                .andExpect(jsonPath("$.error.message").exists());
++    }
++
++    @Test
++    void refresh_returnsTokenPairEnvelope_andInvalidTokenIs401() throws Exception {
++        when(authService.refresh("good")).thenReturn(new TokenPairResponse("acc2", "ref2", 900));
++        mvc.perform(post("/api/v1/auth/refresh").contentType(MediaType.APPLICATION_JSON).content("{\"refreshToken\":\"good\"}"))
++                .andExpect(status().isOk())
++                .andExpect(jsonPath("$.data.accessToken").value("acc2"))
++                .andExpect(jsonPath("$.data.refreshToken").value("ref2"))
++                .andExpect(jsonPath("$.data.user").doesNotExist());
++
++        when(authService.refresh("revoked")).thenThrow(new UnauthorizedException("Phiên đăng nhập không hợp lệ."));
++        mvc.perform(post("/api/v1/auth/refresh").contentType(MediaType.APPLICATION_JSON).content("{\"refreshToken\":\"revoked\"}"))
++                .andExpect(status().isUnauthorized())
++                .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"));
++    }
++
++    @Test
++    void logout_revokesToken_andReturnsNullData() throws Exception {
++        MvcResult result = mvc.perform(post("/api/v1/auth/logout").contentType(MediaType.APPLICATION_JSON)
++                        .content("{\"refreshToken\":\"raw\"}"))
++                .andExpect(status().isOk())
++                .andReturn();
++
++        verify(authService).logout("raw");
++        assertTrue(result.getResponse().getContentAsString().contains("\"data\":null"));
++    }
++
++    @Test
++    void me_withoutToken_returns401() throws Exception {
++        mvc.perform(get("/api/v1/auth/me"))
++                .andExpect(status().isUnauthorized())
++                .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"));
++    }
++
++    @Test
++    void me_withValidAccessToken_returnsCurrentUser_andDeactivatedUserIs401() throws Exception {
++        User u = user();
++        String token = jwt.issueAccessToken(u);
++        when(userRepository.existsByIdAndActiveTrue(3L)).thenReturn(true);
++        when(userRepository.findById(3L)).thenReturn(Optional.of(u));
++
++        mvc.perform(get("/api/v1/auth/me").header("Authorization", "Bearer " + token))
++                .andExpect(status().isOk())
++                .andExpect(jsonPath("$.data.id").value(3))
++                .andExpect(jsonPath("$.data.username").value("alice"));
++
++        when(userRepository.existsByIdAndActiveTrue(3L)).thenReturn(false); // account deactivated meanwhile
++        mvc.perform(get("/api/v1/auth/me").header("Authorization", "Bearer " + token))
++                .andExpect(status().isUnauthorized());
++    }
++}
+diff --git a/backend/src/test/java/com/example/backend/security/AuthInterceptorTest.java b/backend/src/test/java/com/example/backend/security/AuthInterceptorTest.java
+new file mode 100644
+index 0000000..7f95366
+--- /dev/null
++++ b/backend/src/test/java/com/example/backend/security/AuthInterceptorTest.java
+@@ -0,0 +1,77 @@
++package com.example.backend.security;
++
++import com.example.backend.entity.Role;
++import com.example.backend.entity.User;
++import com.example.backend.repository.UserRepository;
++import org.junit.jupiter.api.Test;
++import org.springframework.mock.web.MockHttpServletRequest;
++import org.springframework.mock.web.MockHttpServletResponse;
++
++import java.time.Clock;
++import java.time.Duration;
++import java.time.Instant;
++import java.time.ZoneOffset;
++import java.util.HashSet;
++import java.util.Set;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertNotNull;
++import static org.junit.jupiter.api.Assertions.assertNull;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.never;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.when;
++
++class AuthInterceptorTest {
++
++    private final JwtService jwt = new JwtService(TestJwt.SECRET, 900);
++    private final UserRepository users = mock(UserRepository.class);
++    private final AuthInterceptor interceptor = new AuthInterceptor(jwt, users);
++
++    private static User user(long id) {
++        User u = new User();
++        u.setId(id);
++        u.setRoles(new HashSet<>(Set.of(new Role(1L, Role.ADMIN))));
++        return u;
++    }
++
++    private CurrentUser run(String authorization) {
++        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/orders");
++        if (authorization != null) request.addHeader("Authorization", authorization);
++        assertTrue(interceptor.preHandle(request, new MockHttpServletResponse(), new Object()));
++        return (CurrentUser) request.getAttribute(AuthInterceptor.REQUEST_ATTR);
++    }
++
++    @Test
++    void validToken_activeUser_attachesCurrentUserFromClaims() {
++        when(users.existsByIdAndActiveTrue(9L)).thenReturn(true);
++
++        CurrentUser current = run("Bearer " + jwt.issueAccessToken(user(9)));
++
++        assertNotNull(current);
++        assertEquals(9L, current.getUserId());
++        assertTrue(current.isAdmin());
++    }
++
++    @Test
++    void interceptor_deactivatedUser_isRejected() {
++        when(users.existsByIdAndActiveTrue(9L)).thenReturn(false); // deactivated or deleted
++
++        assertNull(run("Bearer " + jwt.issueAccessToken(user(9))));
++    }
++
++    @Test
++    void expiredTamperedLegacyOrMissingToken_leavesNoCurrentUser_andSkipsDbLookup() {
++        Clock past = Clock.fixed(Instant.now().minus(Duration.ofHours(1)), ZoneOffset.UTC);
++        String expired = new JwtService(TestJwt.SECRET, 900, past).issueAccessToken(user(9));
++        String valid = jwt.issueAccessToken(user(9));
++
++        assertNull(run("Bearer " + expired));
++        assertNull(run("Bearer " + valid.substring(0, valid.length() - 3) + "abc"));
++        assertNull(run("Bearer 3f2b8c1e-5a4d-4e0b-9a52-0c3d6f7e8a91")); // legacy UUID session
++        assertNull(run("Basic abc"));
++        assertNull(run(null));
++        verify(users, never()).existsByIdAndActiveTrue(org.mockito.ArgumentMatchers.anyLong());
++    }
++}
+diff --git a/backend/src/test/java/com/example/backend/security/InMemoryRefreshTokens.java b/backend/src/test/java/com/example/backend/security/InMemoryRefreshTokens.java
+new file mode 100644
+index 0000000..37c47c7
+--- /dev/null
++++ b/backend/src/test/java/com/example/backend/security/InMemoryRefreshTokens.java
+@@ -0,0 +1,65 @@
++package com.example.backend.security;
++
++import com.example.backend.entity.RefreshToken;
++import com.example.backend.repository.RefreshTokenRepository;
++
++import java.util.LinkedHashMap;
++import java.util.Map;
++import java.util.Optional;
++import java.util.concurrent.atomic.AtomicLong;
++
++import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.ArgumentMatchers.anyLong;
++import static org.mockito.ArgumentMatchers.anyString;
++import static org.mockito.Mockito.lenient;
++import static org.mockito.Mockito.mock;
++
++/** Mockito-backed in-memory stand-in for RefreshTokenRepository (same atomic "claim" semantics as the SQL). */
++final class InMemoryRefreshTokens {
++
++    final Map<Long, RefreshToken> rows = new LinkedHashMap<>();
++    final RefreshTokenRepository repository = mock(RefreshTokenRepository.class);
++    private final AtomicLong ids = new AtomicLong(0);
++
++    InMemoryRefreshTokens() {
++        lenient().when(repository.save(any(RefreshToken.class))).thenAnswer(inv -> {
++            RefreshToken t = inv.getArgument(0);
++            if (t.getId() == null) {
++                try {
++                    var f = RefreshToken.class.getDeclaredField("id");
++                    f.setAccessible(true);
++                    f.set(t, ids.incrementAndGet());
++                } catch (ReflectiveOperationException e) {
++                    throw new IllegalStateException(e);
++                }
++            }
++            rows.put(t.getId(), t);
++            return t;
++        });
++        lenient().when(repository.findByTokenHash(anyString())).thenAnswer(inv ->
++                rows.values().stream().filter(t -> t.getTokenHash().equals(inv.getArgument(0))).findFirst());
++        lenient().when(repository.revokeIfActive(anyLong())).thenAnswer(inv -> {
++            RefreshToken t = rows.get(inv.<Long>getArgument(0));
++            if (t == null || t.isRevoked()) return 0;
++            t.setRevoked(true);
++            return 1;
++        });
++        lenient().when(repository.markReplaced(anyLong(), anyLong())).thenAnswer(inv -> {
++            RefreshToken t = rows.get(inv.<Long>getArgument(0));
++            if (t == null) return 0;
++            t.setReplacedById(inv.getArgument(1));
++            return 1;
++        });
++        lenient().when(repository.revokeFamily(anyString())).thenAnswer(inv -> {
++            int n = 0;
++            for (RefreshToken t : rows.values()) {
++                if (t.getFamilyId().equals(inv.getArgument(0)) && !t.isRevoked()) { t.setRevoked(true); n++; }
++            }
++            return n;
++        });
++    }
++
++    Optional<RefreshToken> byRaw(String raw) {
++        return rows.values().stream().filter(t -> t.getTokenHash().equals(RefreshTokenService.sha256Hex(raw))).findFirst();
++    }
++}
+diff --git a/backend/src/test/java/com/example/backend/security/JwtServiceTest.java b/backend/src/test/java/com/example/backend/security/JwtServiceTest.java
+new file mode 100644
+index 0000000..75b8547
+--- /dev/null
++++ b/backend/src/test/java/com/example/backend/security/JwtServiceTest.java
+@@ -0,0 +1,112 @@
++package com.example.backend.security;
++
++import com.example.backend.entity.Role;
++import com.example.backend.entity.User;
++import io.jsonwebtoken.JwtException;
++import io.jsonwebtoken.Jwts;
++import io.jsonwebtoken.security.Keys;
++import org.junit.jupiter.api.Test;
++
++import java.nio.charset.StandardCharsets;
++import java.time.Clock;
++import java.time.Duration;
++import java.time.Instant;
++import java.time.ZoneOffset;
++import java.util.Base64;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Set;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertNotEquals;
++import static org.junit.jupiter.api.Assertions.assertThrows;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++
++class JwtServiceTest {
++
++    private static User user(long id, String... roleNames) {
++        User u = new User();
++        u.setId(id);
++        u.setUsername("u" + id);
++        Set<Role> roles = new HashSet<>();
++        long rid = 1;
++        for (String r : roleNames) roles.add(new Role(rid++, r));
++        u.setRoles(roles);
++        return u;
++    }
++
++    private final JwtService jwt = new JwtService(TestJwt.SECRET, 900);
++
++    @Test
++    void issue_validToken_containsSubRolesPermissionsIatExpJti_andParsesBack() {
++        String token = jwt.issueAccessToken(user(7, Role.USER, Role.ADMIN));
++
++        var claims = Jwts.parser().verifyWith(Keys.hmacShaKeyFor(TestJwt.SECRET.getBytes(StandardCharsets.UTF_8)))
++                .build().parseSignedClaims(token).getPayload();
++        assertEquals("7", claims.getSubject());
++        assertEquals(List.of("ADMIN", "USER"), claims.get("roles"));
++        assertEquals(List.of(), claims.get("permissions"));
++        assertTrue(claims.getId() != null && !claims.getId().isBlank());
++        assertEquals(900_000L, claims.getExpiration().getTime() - claims.getIssuedAt().getTime(), 1000);
++
++        CurrentUser current = jwt.parse(token);
++        assertEquals(7L, current.getUserId());
++        assertTrue(current.isAdmin());
++        assertEquals(List.of("ADMIN", "USER"), current.getRoles());
++        assertEquals(List.of(), current.getPermissions());
++    }
++
++    @Test
++    void jwt_expiredToken_isRejected() {
++        Clock past = Clock.fixed(Instant.now().minus(Duration.ofHours(1)), ZoneOffset.UTC);
++        String expired = new JwtService(TestJwt.SECRET, 900, past).issueAccessToken(user(1, Role.USER));
++
++        assertThrows(JwtException.class, () -> jwt.parse(expired));
++    }
++
++    @Test
++    void jwt_tamperedSignature_isRejected() {
++        String token = jwt.issueAccessToken(user(1, Role.USER));
++        String[] parts = token.split("\\.");
++        String sig = parts[2];
++        String flipped = sig.substring(0, sig.length() - 2) + (sig.endsWith("AA") ? "BB" : "AA");
++
++        assertThrows(JwtException.class, () -> jwt.parse(parts[0] + "." + parts[1] + "." + flipped));
++    }
++
++    @Test
++    void jwt_tamperedPayload_isRejected() {
++        String token = jwt.issueAccessToken(user(1, Role.USER));
++        String[] parts = token.split("\\.");
++        String forgedPayload = Base64.getUrlEncoder().withoutPadding().encodeToString(
++                "{\"sub\":\"1\",\"roles\":[\"ADMIN\"],\"permissions\":[]}".getBytes(StandardCharsets.UTF_8));
++
++        assertThrows(JwtException.class, () -> jwt.parse(parts[0] + "." + forgedPayload + "." + parts[2]));
++    }
++
++    @Test
++    void jwt_signedWithOtherKey_unsignedAndLegacyUuidTokens_areRejected() {
++        String otherKeyToken = new JwtService("another-secret-another-secret-another-secret-123456", 900)
++                .issueAccessToken(user(1, Role.USER));
++        String unsigned = Jwts.builder().subject("1").claim("roles", List.of("ADMIN")).compact();
++
++        assertThrows(JwtException.class, () -> jwt.parse(otherKeyToken));
++        assertThrows(JwtException.class, () -> jwt.parse(unsigned));
++        assertThrows(RuntimeException.class, () -> jwt.parse("3f2b8c1e-5a4d-4e0b-9a52-0c3d6f7e8a91")); // legacy UUID session
++        assertThrows(RuntimeException.class, () -> jwt.parse(""));
++    }
++
++    @Test
++    void jwt_missingOrShortSecret_failsFastAtStartup() {
++        assertThrows(IllegalStateException.class, () -> new JwtService("", 900));
++        assertThrows(IllegalStateException.class, () -> new JwtService(null, 900));
++        IllegalStateException tooShort = assertThrows(IllegalStateException.class, () -> new JwtService("short-secret", 900));
++        assertTrue(tooShort.getMessage().contains("JWT_SECRET"));
++    }
++
++    @Test
++    void eachToken_hasUniqueJti() {
++        User u = user(1, Role.USER);
++        assertNotEquals(jwt.issueAccessToken(u), jwt.issueAccessToken(u));
++    }
++}
+diff --git a/backend/src/test/java/com/example/backend/security/RefreshTokenServiceTest.java b/backend/src/test/java/com/example/backend/security/RefreshTokenServiceTest.java
+new file mode 100644
+index 0000000..430edef
+--- /dev/null
++++ b/backend/src/test/java/com/example/backend/security/RefreshTokenServiceTest.java
+@@ -0,0 +1,128 @@
++package com.example.backend.security;
++
++import com.example.backend.entity.RefreshToken;
++import com.example.backend.entity.Role;
++import com.example.backend.entity.User;
++import com.example.backend.exception.UnauthorizedException;
++import com.example.backend.repository.UserRepository;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++
++import java.time.Clock;
++import java.time.Duration;
++import java.time.Instant;
++import java.time.ZoneOffset;
++import java.util.HashSet;
++import java.util.Optional;
++import java.util.Set;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertFalse;
++import static org.junit.jupiter.api.Assertions.assertNotEquals;
++import static org.junit.jupiter.api.Assertions.assertNotNull;
++import static org.junit.jupiter.api.Assertions.assertThrows;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.when;
++
++class RefreshTokenServiceTest {
++
++    private InMemoryRefreshTokens store;
++    private UserRepository users;
++    private RefreshTokenService service;
++    private User user;
++
++    @BeforeEach
++    void setUp() {
++        store = new InMemoryRefreshTokens();
++        users = mock(UserRepository.class);
++        user = new User();
++        user.setId(5L);
++        user.setUsername("alice");
++        user.setRoles(new HashSet<>(Set.of(new Role(1L, Role.USER))));
++        when(users.findById(5L)).thenReturn(Optional.of(user));
++        service = new RefreshTokenService(store.repository, users, 14, Clock.systemUTC());
++    }
++
++    @Test
++    void issue_storesOnlySha256Hash_andRawTokenIsLongAndUrlSafe() {
++        String raw = service.issueNewFamily(user);
++
++        assertTrue(raw.length() >= 86, "64 random bytes encode to >= 86 URL-safe chars");
++        assertTrue(raw.matches("[A-Za-z0-9_-]+"));
++        RefreshToken row = store.byRaw(raw).orElseThrow();
++        assertEquals(64, row.getTokenHash().length());
++        assertNotEquals(raw, row.getTokenHash());
++        assertFalse(store.rows.values().stream().anyMatch(t -> t.getTokenHash().equals(raw)), "raw token must not be stored");
++        assertFalse(row.isRevoked());
++        assertEquals(5L, row.getUserId());
++    }
++
++    @Test
++    void refresh_validToken_rotatesAndRevokesOld() {
++        String first = service.issueNewFamily(user);
++
++        RefreshTokenService.Rotated rotated = service.rotate(first);
++
++        assertNotEquals(first, rotated.refreshToken());
++        assertEquals(user, rotated.user());
++        RefreshToken old = store.byRaw(first).orElseThrow();
++        RefreshToken next = store.byRaw(rotated.refreshToken()).orElseThrow();
++        assertTrue(old.isRevoked());
++        assertFalse(next.isRevoked());
++        assertEquals(old.getFamilyId(), next.getFamilyId());
++        assertEquals(next.getId(), old.getReplacedById());
++    }
++
++    @Test
++    void refresh_revokedToken_revokesWholeFamilyAndReturns401() {
++        String first = service.issueNewFamily(user);
++        String second = service.rotate(first).refreshToken(); // first is now revoked, second is the live token
++
++        assertThrows(UnauthorizedException.class, () -> service.rotate(first)); // reuse of the rotated token
++
++        assertTrue(store.byRaw(second).orElseThrow().isRevoked(), "the live token of the family must be revoked too");
++        assertThrows(UnauthorizedException.class, () -> service.rotate(second));
++    }
++
++    @Test
++    void refresh_expiredToken_returns401() {
++        Clock past = Clock.fixed(Instant.now().minus(Duration.ofDays(30)), ZoneOffset.UTC);
++        String raw = new RefreshTokenService(store.repository, users, 14, past).issueNewFamily(user);
++
++        assertThrows(UnauthorizedException.class, () -> service.rotate(raw));
++    }
++
++    @Test
++    void refresh_unknownOrBlankOrOversizedToken_returns401() {
++        assertThrows(UnauthorizedException.class, () -> service.rotate("not-a-real-token"));
++        assertThrows(UnauthorizedException.class, () -> service.rotate(""));
++        assertThrows(UnauthorizedException.class, () -> service.rotate(null));
++        assertThrows(UnauthorizedException.class, () -> service.rotate("x".repeat(5000)));
++    }
++
++    @Test
++    void refresh_deactivatedUser_returns401AndRevokesFamily() {
++        String raw = service.issueNewFamily(user);
++        user.setActive(false);
++
++        assertThrows(UnauthorizedException.class, () -> service.rotate(raw));
++
++        assertTrue(store.byRaw(raw).orElseThrow().isRevoked());
++        assertTrue(store.rows.values().stream().allMatch(RefreshToken::isRevoked));
++    }
++
++    @Test
++    void logout_revokesRefreshToken() {
++        String raw = service.issueNewFamily(user);
++
++        service.revoke(raw);
++
++        assertTrue(store.byRaw(raw).orElseThrow().isRevoked());
++        assertThrows(UnauthorizedException.class, () -> service.rotate(raw));
++        service.revoke(raw);              // idempotent
++        service.revoke("unknown-token");  // unknown tokens are ignored
++        service.revoke(null);
++        assertNotNull(store.byRaw(raw));
++    }
++}
+diff --git a/backend/src/test/java/com/example/backend/security/TestJwt.java b/backend/src/test/java/com/example/backend/security/TestJwt.java
+new file mode 100644
+index 0000000..f4864d4
+--- /dev/null
++++ b/backend/src/test/java/com/example/backend/security/TestJwt.java
+@@ -0,0 +1,21 @@
++package com.example.backend.security;
++
++import java.io.InputStream;
++import java.util.Properties;
++
++/** Loads the TEST-ONLY signing secret from src/test/resources/test-jwt.properties. */
++public final class TestJwt {
++    public static final String SECRET = load();
++
++    private TestJwt() {}
++
++    private static String load() {
++        try (InputStream in = TestJwt.class.getClassLoader().getResourceAsStream("test-jwt.properties")) {
++            Properties p = new Properties();
++            p.load(in);
++            return p.getProperty("ecogreen.jwt.secret");
++        } catch (Exception e) {
++            throw new IllegalStateException("test-jwt.properties missing", e);
++        }
++    }
++}
+diff --git a/backend/src/test/java/com/example/backend/service/AuthServiceGoogleLoginTest.java b/backend/src/test/java/com/example/backend/service/AuthServiceGoogleLoginTest.java
+index 812910b..b6cc1ad 100644
+--- a/backend/src/test/java/com/example/backend/service/AuthServiceGoogleLoginTest.java
++++ b/backend/src/test/java/com/example/backend/service/AuthServiceGoogleLoginTest.java
+@@ -8,7 +8,8 @@ import com.example.backend.exception.GoogleLoginUnavailableException;
+ import com.example.backend.exception.UnauthorizedException;
+ import com.example.backend.repository.RoleRepository;
+ import com.example.backend.repository.UserRepository;
+-import com.example.backend.security.AuthTokenStore;
++import com.example.backend.security.JwtService;
++import com.example.backend.security.RefreshTokenService;
+ import com.example.backend.security.GoogleIdentity;
+ import com.example.backend.security.GoogleIdentityVerifier;
+ import org.junit.jupiter.api.Test;
+@@ -31,7 +32,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
+ import static org.junit.jupiter.api.Assertions.assertThrows;
+ import static org.junit.jupiter.api.Assertions.assertTrue;
+ import static org.mockito.ArgumentMatchers.any;
+-import static org.mockito.ArgumentMatchers.anyLong;
+ import static org.mockito.ArgumentMatchers.anyString;
+ import static org.mockito.Mockito.lenient;
+ import static org.mockito.Mockito.never;
+@@ -46,7 +46,8 @@ class AuthServiceGoogleLoginTest {
+     @Mock private UserRepository userRepository;
+     @Mock private RoleRepository roleRepository;
+     @Mock private PasswordHasher passwordHasher;
+-    @Mock private AuthTokenStore tokenStore;
++    @Mock private JwtService jwtService;
++    @Mock private RefreshTokenService refreshTokenService;
+     @Mock private CartService cartService;
+     @Mock private GoogleIdentityVerifier googleVerifier;
+ 
+@@ -78,7 +79,8 @@ class AuthServiceGoogleLoginTest {
+ 
+         assertThrows(UnauthorizedException.class, () -> authService.loginWithGoogle(tokenRequest()));
+ 
+-        verify(tokenStore, never()).issueToken(anyLong());
++        verify(jwtService, never()).issueAccessToken(any());
++        verify(refreshTokenService, never()).issueNewFamily(any());
+         verify(userRepository, never()).save(any());
+     }
+ 
+@@ -91,7 +93,8 @@ class AuthServiceGoogleLoginTest {
+ 
+         assertThrows(UnauthorizedException.class, () -> authService.loginWithGoogle(tokenRequest()));
+ 
+-        verify(tokenStore, never()).issueToken(anyLong());
++        verify(jwtService, never()).issueAccessToken(any());
++        verify(refreshTokenService, never()).issueNewFamily(any());
+     }
+ 
+     @Test
+@@ -104,7 +107,8 @@ class AuthServiceGoogleLoginTest {
+ 
+         verify(userRepository, never()).findByEmailIgnoreCase(anyString());
+         verify(userRepository, never()).save(any());
+-        verify(tokenStore, never()).issueToken(anyLong());
++        verify(jwtService, never()).issueAccessToken(any());
++        verify(refreshTokenService, never()).issueNewFamily(any());
+     }
+ 
+     /** The original exploit: POST /api/auth/google {"email":"admin@ecogreen.vn"} with no token. */
+@@ -122,7 +126,7 @@ class AuthServiceGoogleLoginTest {
+         assertThrows(UnauthorizedException.class, () -> authService.loginWithGoogle(new GoogleAuthRequest("  ")));
+         assertThrows(UnauthorizedException.class, () -> authService.loginWithGoogle(null));
+ 
+-        verifyNoInteractions(userRepository, tokenStore, cartService);
++        verifyNoInteractions(userRepository, jwtService, refreshTokenService, cartService);
+     }
+ 
+     @Test
+@@ -134,11 +138,13 @@ class AuthServiceGoogleLoginTest {
+         when(userRepository.findByGoogleSub("sub-123")).thenReturn(Optional.empty());
+         when(userRepository.findByEmailIgnoreCase("alice@example.com")).thenReturn(Optional.of(existing));
+         when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+-        when(tokenStore.issueToken(7L)).thenReturn("session-token");
++        when(jwtService.issueAccessToken(existing)).thenReturn("access-token");
++        when(refreshTokenService.issueNewFamily(existing)).thenReturn("refresh-token");
+ 
+         AuthResponse response = authService.loginWithGoogle(tokenRequest());
+ 
+-        assertEquals("session-token", response.token);
++        assertEquals("access-token", response.accessToken());
++        assertEquals("refresh-token", response.refreshToken());
+         assertEquals(7L, response.user.id);
+         assertEquals("sub-123", existing.getGoogleSub());
+         verify(userRepository).save(existing);
+@@ -160,7 +166,8 @@ class AuthServiceGoogleLoginTest {
+             u.setId(42L);
+             return u;
+         });
+-        when(tokenStore.issueToken(42L)).thenReturn("session-token");
++        when(jwtService.issueAccessToken(any(User.class))).thenReturn("access-token");
++        when(refreshTokenService.issueNewFamily(any(User.class))).thenReturn("refresh-token");
+ 
+         AuthResponse response = authService.loginWithGoogle(tokenRequest());
+ 
+@@ -175,7 +182,8 @@ class AuthServiceGoogleLoginTest {
+         assertNotNull(created.getUsername());
+         verify(passwordHasher).hash(anyString()); // random, unusable password
+         verify(cartService).createCartForUser(created);
+-        assertEquals("session-token", response.token);
++        assertEquals("access-token", response.accessToken());
++        assertEquals("refresh-token", response.refreshToken());
+     }
+ 
+     @Test
+@@ -191,7 +199,8 @@ class AuthServiceGoogleLoginTest {
+ 
+         assertEquals("sub-original", existing.getGoogleSub());
+         verify(userRepository, never()).save(any());
+-        verify(tokenStore, never()).issueToken(anyLong());
++        verify(jwtService, never()).issueAccessToken(any());
++        verify(refreshTokenService, never()).issueNewFamily(any());
+     }
+ 
+     @Test
+@@ -201,7 +210,7 @@ class AuthServiceGoogleLoginTest {
+         assertThrows(GoogleLoginUnavailableException.class, () -> authService.loginWithGoogle(tokenRequest()));
+ 
+         verify(googleVerifier, never()).verify(anyString());
+-        verifyNoInteractions(userRepository, tokenStore);
++        verifyNoInteractions(userRepository, jwtService, refreshTokenService);
+     }
+ 
+     @Test
+@@ -215,6 +224,7 @@ class AuthServiceGoogleLoginTest {
+ 
+         assertThrows(UnauthorizedException.class, () -> authService.loginWithGoogle(tokenRequest()));
+ 
+-        verify(tokenStore, never()).issueToken(anyLong());
++        verify(jwtService, never()).issueAccessToken(any());
++        verify(refreshTokenService, never()).issueNewFamily(any());
+     }
+ }
+diff --git a/backend/src/test/java/com/example/backend/service/AuthServiceLoginTest.java b/backend/src/test/java/com/example/backend/service/AuthServiceLoginTest.java
+new file mode 100644
+index 0000000..06784b6
+--- /dev/null
++++ b/backend/src/test/java/com/example/backend/service/AuthServiceLoginTest.java
+@@ -0,0 +1,156 @@
++package com.example.backend.service;
++
++import com.example.backend.dto.AuthResponse;
++import com.example.backend.dto.TokenPairResponse;
++import com.example.backend.entity.Role;
++import com.example.backend.entity.User;
++import com.example.backend.exception.UnauthorizedException;
++import com.example.backend.repository.UserRepository;
++import com.example.backend.security.CurrentUser;
++import com.example.backend.security.JwtService;
++import com.example.backend.security.LoginThrottle;
++import com.example.backend.security.RefreshTokenService;
++import com.example.backend.security.TestJwt;
++import org.junit.jupiter.api.Test;
++import org.junit.jupiter.api.extension.ExtendWith;
++import org.mockito.InjectMocks;
++import org.mockito.Mock;
++import org.mockito.Spy;
++import org.mockito.junit.jupiter.MockitoExtension;
++
++import java.util.HashSet;
++import java.util.List;
++import java.util.Optional;
++import java.util.Set;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertThrows;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.ArgumentMatchers.anyString;
++import static org.mockito.ArgumentMatchers.eq;
++import static org.mockito.Mockito.never;
++import static org.mockito.Mockito.times;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.when;
++
++/** B01-P2: username/password login, refresh and logout orchestration in AuthService. */
++@ExtendWith(MockitoExtension.class)
++class AuthServiceLoginTest {
++
++    private static final String BAD = "Tên đăng nhập hoặc mật khẩu không chính xác.";
++
++    @Mock private UserRepository userRepository;
++    @Mock private PasswordHasher passwordHasher;
++    @Mock private RefreshTokenService refreshTokenService;
++    @Spy private JwtService jwtService = new JwtService(TestJwt.SECRET, 900);
++    @Spy private LoginThrottle loginThrottle = new LoginThrottle(3, 900, java.time.Clock.systemUTC());
++
++    @InjectMocks private AuthService authService;
++
++    private static User user(boolean active) {
++        User u = new User();
++        u.setId(11L);
++        u.setUsername("alice");
++        u.setEmail("alice@example.com");
++        u.setPassword("bcrypt-hash");
++        u.setActive(active);
++        u.setRoles(new HashSet<>(Set.of(new Role(1L, Role.USER), new Role(2L, Role.ADMIN))));
++        return u;
++    }
++
++    @Test
++    void login_correctPassword_returnsValidJwtWithClaims() {
++        User u = user(true);
++        when(userRepository.findByUsername("alice")).thenReturn(Optional.of(u));
++        when(passwordHasher.matches("secret", "bcrypt-hash")).thenReturn(true);
++        when(refreshTokenService.issueNewFamily(u)).thenReturn("refresh-raw");
++
++        AuthResponse response = authService.login("alice", "secret", "1.2.3.4");
++
++        CurrentUser parsed = jwtService.parse(response.accessToken()); // signature + expiry verified
++        assertEquals(11L, parsed.getUserId());
++        assertEquals(List.of("ADMIN", "USER"), parsed.getRoles());
++        assertEquals(List.of(), parsed.getPermissions());
++        assertEquals("refresh-raw", response.refreshToken());
++        assertEquals(900L, response.expiresIn());
++        assertEquals("alice", response.user().username);
++        verify(userRepository, times(1)).findByUsername(anyString()); // user is queried exactly once
++    }
++
++    @Test
++    void login_wrongPassword_throwsUnauthorizedWithoutUserEnumeration() {
++        when(userRepository.findByUsername("alice")).thenReturn(Optional.of(user(true)));
++        when(passwordHasher.matches("wrong", "bcrypt-hash")).thenReturn(false);
++        when(userRepository.findByUsername("ghost")).thenReturn(Optional.empty());
++        when(passwordHasher.hash(anyString())).thenReturn("dummy-bcrypt-hash");
++        when(passwordHasher.matches("whatever", "dummy-bcrypt-hash")).thenReturn(false);
++
++        UnauthorizedException wrongPassword =
++                assertThrows(UnauthorizedException.class, () -> authService.login("alice", "wrong", "1.2.3.4"));
++        UnauthorizedException unknownUser =
++                assertThrows(UnauthorizedException.class, () -> authService.login("ghost", "whatever", "1.2.3.4"));
++
++        assertEquals(BAD, wrongPassword.getMessage());
++        assertEquals(wrongPassword.getMessage(), unknownUser.getMessage()); // identical => no enumeration
++        verify(passwordHasher).matches("whatever", "dummy-bcrypt-hash");     // a BCrypt comparison also ran for the unknown user
++        verify(refreshTokenService, never()).issueNewFamily(any());
++    }
++
++    @Test
++    void login_deactivatedUser_isRejected_andLockedMessageOnlyAfterCorrectPassword() {
++        when(userRepository.findByUsername("bob")).thenReturn(Optional.of(user(false)));
++        when(passwordHasher.matches("right", "bcrypt-hash")).thenReturn(true);
++        when(passwordHasher.matches("wrong", "bcrypt-hash")).thenReturn(false);
++
++        UnauthorizedException withWrong =
++                assertThrows(UnauthorizedException.class, () -> authService.login("bob", "wrong", "1.2.3.4"));
++        UnauthorizedException withRight =
++                assertThrows(UnauthorizedException.class, () -> authService.login("bob", "right", "1.2.3.4"));
++
++        assertEquals(BAD, withWrong.getMessage());
++        assertTrue(withRight.getMessage().contains("khóa"));
++        verify(refreshTokenService, never()).issueNewFamily(any());
++    }
++
++    @Test
++    void login_repeatedFailures_getRateLimited_evenWithCorrectPasswordAfterwards() {
++        when(userRepository.findByUsername("alice")).thenReturn(Optional.of(user(true)));
++        when(passwordHasher.matches("wrong", "bcrypt-hash")).thenReturn(false);
++
++        for (int i = 0; i < 3; i++) {
++            assertThrows(UnauthorizedException.class, () -> authService.login("alice", "wrong", "9.9.9.9"));
++        }
++        LoginThrottle.TooManyAttemptsException locked = assertThrows(LoginThrottle.TooManyAttemptsException.class,
++                () -> authService.login("alice", "wrong", "9.9.9.9"));
++
++        assertTrue(locked.getRetryAfterSeconds() > 0);
++        verify(userRepository, times(3)).findByUsername(anyString()); // 4th attempt rejected before any lookup/BCrypt
++    }
++
++    @Test
++    void login_blankCredentials_areRejectedAsBadCredentials() {
++        assertThrows(UnauthorizedException.class, () -> authService.login(null, "x", "ip"));
++        assertThrows(UnauthorizedException.class, () -> authService.login("alice", "", "ip"));
++        verify(userRepository, never()).findByUsername(any());
++    }
++
++    @Test
++    void refresh_issuesNewAccessTokenAndRotatedRefreshToken() {
++        User u = user(true);
++        when(refreshTokenService.rotate("old-raw")).thenReturn(new RefreshTokenService.Rotated("new-raw", u));
++
++        TokenPairResponse pair = authService.refresh("old-raw");
++
++        assertEquals("new-raw", pair.refreshToken());
++        assertEquals(11L, jwtService.parse(pair.accessToken()).getUserId());
++        assertEquals(900L, pair.expiresIn());
++    }
++
++    @Test
++    void logout_revokesTheGivenRefreshToken() {
++        authService.logout("raw-refresh");
++
++        verify(refreshTokenService).revoke(eq("raw-refresh"));
++    }
++}
+diff --git a/backend/src/test/resources/test-jwt.properties b/backend/src/test/resources/test-jwt.properties
+new file mode 100644
+index 0000000..02df876
+--- /dev/null
++++ b/backend/src/test/resources/test-jwt.properties
+@@ -0,0 +1,2 @@
++# TEST-ONLY signing key. Not a real secret; used exclusively by automated tests. Never use it outside src/test.
++ecogreen.jwt.secret=TEST-ONLY-jwt-secret-do-not-use-in-any-real-environment-0123456789
+diff --git a/docs/ai/contracts/B01-auth.md b/docs/ai/contracts/B01-auth.md
+new file mode 100644
+index 0000000..074cb7c
+--- /dev/null
++++ b/docs/ai/contracts/B01-auth.md
+@@ -0,0 +1,64 @@
++# Contract: B01-P2 — Authentication (JWT access token + rotating refresh token)
++
++Owner: B01-P2. Depends on: B01-F1 (envelope/errors), B01-P1 (Google ID-token verification, unchanged).
++All authentication traffic is under `/api/v1/auth`. The legacy `/api/auth/*` and `GET /api/users/me` are **removed** (404).
++
++## 1. Configuration
++| Property / env | Meaning |
++|---|---|
++| `JWT_SECRET` → `ecogreen.jwt.secret` | HS256 key, **≥ 32 bytes, required**. The application **fails to start** with a clear message when missing/short. No default exists. Example: `openssl rand -base64 48` |
++| `ecogreen.jwt.access-ttl-seconds` | default 900 (15 min) |
++| `ecogreen.jwt.refresh-ttl-days` | default 14 |
++| `ecogreen.auth.max-failed-logins` / `lockout-window-seconds` | default 5 / 900 (per username + client IP) |
++Tests use `src/test/resources/test-jwt.properties` (TEST-ONLY secret).
++
++## 2. Access token (JWT, HS256)
++Claims: `sub` = user id (string), `roles` = `["ADMIN","USER"]`, `permissions` = `[]` (filled by B01-P3), `iat`, `exp`, `jti`.
++Sent as `Authorization: Bearer <accessToken>` only.
++
++## 3. Refresh token
++Opaque, 64 random bytes (URL-safe Base64, 86 chars), shown **once**. Only its hex SHA-256 is stored in `refresh_tokens`
++(`V3__refresh_tokens.sql`). **Rotation**: every `/refresh` revokes the presented token and issues a new one in the same
++family. **Reuse detection**: presenting a revoked token revokes the whole family and returns 401. The claim of a token is an
++atomic `UPDATE ... WHERE revoked = false`, so two concurrent refreshes with one token cannot both succeed (the loser is treated
++as reuse). Deactivated users cannot refresh (family revoked).
++
++## 4. Endpoints (success = `{data, meta:null}`, errors = F1 `{error:{code,message,fields?}}`)
++```
++POST /api/v1/auth/register  {username,email,password}   → 201 {data:{id,username,email,active,roles,permissions}}   (no auto-login)
++POST /api/v1/auth/login     {username,password}          → 200 {data:{accessToken,refreshToken,expiresIn,user:{id,username,email,active,roles,permissions}}}
++POST /api/v1/auth/google    {idToken}                    → 200 same as login        (503 when GOOGLE_CLIENT_ID is not configured)
++POST /api/v1/auth/refresh   {refreshToken}               → 200 {data:{accessToken,refreshToken,expiresIn}}
++POST /api/v1/auth/logout    {refreshToken}               → 200 {data:null}          (revokes that refresh token; idempotent)
++GET  /api/v1/auth/me        (Bearer)                     → 200 {data:{id,username,email,active,roles,permissions}}
++```
++Errors: bad username **or** password → 401 `UNAUTHENTICATED` with the same text (the "account locked" text is only shown after the
++correct password); invalid/expired/reused refresh token → 401; missing body fields → 400 `VALIDATION_ERROR`; too many failures →
++429 `RATE_LIMITED` + `Retry-After`; Google not configured → 503 (`INTERNAL_ERROR` code, no 503 code exists in the closed set).
++`expiresIn` is in seconds.
++
++## 5. How other modules authenticate
++`AuthInterceptor` (path `/api/**`) verifies signature + expiry, then checks `existsByIdAndActiveTrue(userId)` (one indexed
++query, no entity/roles load) and stores `CurrentUser(userId, roles, permissions)` in the request attribute `currentUser`.
++Invalid/absent/expired/legacy tokens leave **no** `CurrentUser` (resolution only). Controllers enforce with `AuthGuard`:
++`requireUser(request)` (401), `requireAdmin(request)` (401/403), `isAdmin(request)`. Their semantics are unchanged.
++`CurrentUser`: `getUserId()`, `getRoles()`, `getPermissions()`, `isAdmin()` (= roles contain `ADMIN`).
++**Trade-off:** roles/permissions come from the token, so a role change takes effect after ≤ 15 min (until refresh); deactivation
++takes effect immediately for API calls (lookup per request) and blocks refresh.
++
++## 6. Frontend
++`localStorage`: `accessToken`, `refreshToken`, `user` (`services/authStorage.js`). `http.js` attaches the access token; on a **401**
++(v1 `UNAUTHENTICATED` or legacy `{message}`) from any endpoint except login/register/google/refresh/logout it performs **one**
++refresh (single-flight across concurrent requests; `navigator.locks` across tabs when available) and retries the original request
++once. Refresh rejected (400/401/403) → storage cleared and redirect to `/login`; network/5xx errors keep the session.
++On boot a legacy UUID session (`token` key, or a non-JWT-shaped access token) is cleared silently.
++`getMe` → `/api/v1/auth/me`.
++
++## 7. Migration impact
++All existing sessions (in-memory UUID tokens) are invalid after deployment: **every user logs in once**. New table `refresh_tokens`
++(run `V3` manually; Flyway is not active; with `ddl-auto=update` Hibernate also creates it in dev).
++
++## 8. Known limits / open decisions
++- Tokens live in `localStorage` (readable by XSS). httpOnly-cookie refresh token = open owner decision **D-5**; not switched.
++- Throttle is per instance, in memory, keyed by username + `getRemoteAddr()` (`X-Forwarded-For` deliberately not trusted).
++- Expired `refresh_tokens` rows are not purged yet (no scheduler in scope).
+diff --git a/frontend/scripts/verify-auth-refresh.mjs b/frontend/scripts/verify-auth-refresh.mjs
+new file mode 100644
+index 0000000..329a7ec
+--- /dev/null
++++ b/frontend/scripts/verify-auth-refresh.mjs
+@@ -0,0 +1,153 @@
++#!/usr/bin/env node
++/**
++ * Dependency-free verification of the access-token refresh logic in src/services/http.js (B01-P2).
++ * Run from the frontend folder after `npm install`:   node scripts/verify-auth-refresh.mjs
++ * It copies http.js + authStorage.js to a temp dir (so Node can resolve the extensionless import), stubs
++ * localStorage/window/navigator, and drives axios through a fake adapter. No network, no test framework.
++ */
++import fs from 'node:fs';
++import os from 'node:os';
++import path from 'node:path';
++import { fileURLToPath, pathToFileURL } from 'node:url';
++
++const frontend = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
++const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-refresh-'));
++fs.writeFileSync(path.join(tmp, 'package.json'), '{"type":"module"}');
++fs.symlinkSync(path.join(frontend, 'node_modules'), path.join(tmp, 'node_modules'), 'dir');
++fs.copyFileSync(path.join(frontend, 'src/services/authStorage.js'), path.join(tmp, 'authStorage.js'));
++fs.writeFileSync(
++  path.join(tmp, 'http.js'),
++  fs.readFileSync(path.join(frontend, 'src/services/http.js'), 'utf8').replace("'./authStorage'", "'./authStorage.js'")
++);
++
++// ── browser stubs ──
++const store = {};
++globalThis.localStorage = {
++  getItem: (k) => (k in store ? store[k] : null),
++  setItem: (k, v) => { store[k] = String(v); },
++  removeItem: (k) => { delete store[k]; }
++};
++let redirectedTo = null;
++globalThis.window = { location: { pathname: '/orders', assign: (u) => { redirectedTo = u; } } };
++
++const axios = (await import(pathToFileURL(path.join(tmp, 'node_modules/axios/index.js')).href)).default;
++const storage = await import(pathToFileURL(path.join(tmp, 'authStorage.js')).href);
++
++// ── fake backend ──
++const jwt = (n) => `h${n}.p${n}.s${n}`;
++let refreshCalls = 0;
++let refreshMode = 'ok'; // ok | 401 | 403 | 500 | network
++let log = [];
++
++const respond = (config, status, data) => {
++  const res = { data, status, statusText: '', headers: {}, config, request: {} };
++  if (status >= 400) {
++    const e = new Error(`http ${status}`);
++    e.config = config; e.response = res; e.isAxiosError = true;
++    throw e;
++  }
++  return res;
++};
++
++axios.defaults.adapter = async (config) => {
++  const url = (config.baseURL || '') + config.url;
++  const auth = config.headers.Authorization || config.headers.get?.('Authorization');
++  log.push(`${config.method} ${url} ${auth || '-'}`);
++
++  if (url === '/api/v1/auth/refresh') {
++    refreshCalls++;
++    await new Promise((r) => setTimeout(r, 20)); // keep it in flight so concurrent 401s overlap
++    if (refreshMode === 'ok') {
++      return respond(config, 200, { data: { accessToken: jwt(2), refreshToken: 'refresh-2', expiresIn: 900 }, meta: null });
++    }
++    if (refreshMode === 'network') { const e = new Error('Network Error'); e.code = 'ERR_NETWORK'; e.config = config; throw e; }
++    return respond(config, Number(refreshMode), { error: { code: 'X', message: 'refresh failed' } });
++  }
++  if (url === '/api/v1/auth/login') {
++    return respond(config, 401, { error: { code: 'UNAUTHENTICATED', message: 'bad credentials' } });
++  }
++  if (auth === `Bearer ${jwt(2)}`) return respond(config, 200, url.startsWith('/api/v1') ? { data: { ok: url }, meta: null } : [{ id: 1 }]);
++  return respond(config, 401, url.startsWith('/api/v1')
++    ? { error: { code: 'UNAUTHENTICATED', message: 'expired' } }
++    : { message: 'Vui lòng đăng nhập để tiếp tục.' });
++};
++
++// http.js (and its internal refresh client) must be imported AFTER the adapter is installed: axios.create() copies defaults.
++const http = (await import(pathToFileURL(path.join(tmp, 'http.js')).href)).default;
++
++// ── helpers ──
++let passed = 0; let total = 0;
++const check = (name, ok, detail = '') => {
++  total++; if (ok) passed++;
++  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok ? '' : `\n      ${detail}`}`);
++};
++const reset = (mode = 'ok') => {
++  storage.clearSession(); log = []; refreshCalls = 0; refreshMode = mode; redirectedTo = null;
++  storage.saveSession({ accessToken: jwt(1), refreshToken: 'refresh-1', user: { id: 1, username: 'alice' } });
++};
++const sessionCleared = () =>
++  storage.getAccessToken() === null && storage.getRefreshToken() === null && storage.getStoredUser() === null;
++const attempt = async (fn) => { try { return { value: await fn() }; } catch (error) { return { error }; } };
++
++// 1-4. a failed refresh (any kind) ends the session
++for (const [label, mode] of [['401', '401'], ['403', '403'], ['500', '500'], ['network error', 'network']]) {
++  reset(mode);
++  const r = await attempt(() => http.get('/orders'));
++  check(`refresh ${label} -> session cleared (access, refresh, user) and redirected to /login`,
++    !!r.error && sessionCleared() && redirectedTo === '/login' && refreshCalls === 1,
++    JSON.stringify({ cleared: sessionCleared(), redirectedTo, refreshCalls }));
++  check(`refresh ${label} -> original error still surfaced with friendlyMessage`,
++    !!r.error?.friendlyMessage, JSON.stringify(r.error?.friendlyMessage));
++}
++
++// 5. concurrent 401s -> exactly one refresh attempt (success, then failure)
++reset('ok');
++const ok3 = await Promise.all([http.get('/orders'), http.get('/v1/products'), http.get('/v1/auth/me')]);
++check('3 concurrent 401s (refresh succeeds) -> ONE refresh, all retried',
++  refreshCalls === 1 && ok3.length === 3 && ok3[1].data.ok === '/api/v1/products', JSON.stringify({ refreshCalls, log }));
++
++reset('500');
++const bad3 = await Promise.all([attempt(() => http.get('/orders')), attempt(() => http.get('/v1/products')), attempt(() => http.get('/v1/auth/me'))]);
++check('3 concurrent 401s (refresh fails with 500) -> ONE refresh attempt, all rejected, session cleared',
++  refreshCalls === 1 && bad3.every((x) => x.error) && sessionCleared() && redirectedTo === '/login', JSON.stringify({ refreshCalls }));
++
++// 6. no loops
++reset('ok');
++const normalAdapter = http.defaults.adapter;
++http.defaults.adapter = async (config) => { // main client only: refresh works, but every other call keeps answering 401
++  if ((config.baseURL + config.url) === '/api/v1/auth/refresh') return normalAdapter(config);
++  log.push(`${config.method} ${config.baseURL + config.url} ${config.headers.Authorization || '-'}`);
++  return respond(config, 401, { message: 'still 401' });
++};
++const loop = await attempt(() => http.get('/orders'));
++http.defaults.adapter = normalAdapter;
++check('server keeps answering 401 after a successful refresh -> one refresh, one retry, then stop',
++  refreshCalls === 1 && !!loop.error && log.filter((l) => l.includes('/api/orders')).length === 2, JSON.stringify({ refreshCalls, log }));
++
++reset('401');
++await attempt(() => http.get('/orders'));
++const callsAfterFailure = log.length;
++const later = await attempt(() => http.get('/orders')); // session already cleared by the failed refresh
++check('after a failed refresh, later 401s do not trigger another refresh',
++  refreshCalls === 1 && !!later.error && log.length === callsAfterFailure + 1, JSON.stringify({ refreshCalls, log }));
++
++reset('401'); // calling the refresh endpoint directly and getting 401 must not recurse into another refresh
++const direct = await attempt(() => http.post('/v1/auth/refresh', { refreshToken: 'x' }));
++check('401 from /auth/refresh called directly never triggers a nested refresh',
++  !!direct.error && refreshCalls === 1, JSON.stringify({ refreshCalls, log }));
++
++// login endpoint
++reset('ok');
++const login = await attempt(() => http.post('/v1/auth/login', { username: 'a', password: 'b' }));
++check('401 from /auth/login never triggers refresh or redirect',
++  refreshCalls === 0 && redirectedTo === null && login.error?.code === 'UNAUTHENTICATED' && login.error?.friendlyMessage === 'bad credentials',
++  JSON.stringify({ refreshCalls, redirectedTo, code: login.error?.code }));
++
++// legacy storage purge
++localStorage.setItem('token', '3f2b8c1e-5a4d-4e0b-9a52-0c3d6f7e8a91');
++storage.purgeLegacySession();
++check('legacy UUID session is cleared silently', localStorage.getItem('token') === null);
++
++fs.rmSync(tmp, { recursive: true, force: true });
++console.log(`\n${passed}/${total} checks passed`);
++process.exit(passed === total ? 0 : 1);
+diff --git a/frontend/src/context/AuthContext.jsx b/frontend/src/context/AuthContext.jsx
+index 9be611a..fbfb41b 100644
+--- a/frontend/src/context/AuthContext.jsx
++++ b/frontend/src/context/AuthContext.jsx
+@@ -1,5 +1,14 @@
+ import React, { createContext, useContext, useState, useEffect } from 'react';
+ import * as authApi from '../services/authApi';
++import {
++  clearSession,
++  getAccessToken,
++  getRefreshToken,
++  getStoredUser,
++  purgeLegacySession,
++  saveSession,
++  saveUser
++} from '../services/authStorage';
+ 
+ const AuthContext = createContext();
+ 
+@@ -11,42 +20,35 @@ export const useAuth = () => {
+ 
+ export const AuthProvider = ({ children }) => {
+   const [user, setUser] = useState(() => {
+-    try {
+-      const stored = localStorage.getItem('user');
+-      return stored ? JSON.parse(stored) : null;
+-    } catch {
+-      return null;
+-    }
++    purgeLegacySession(); // old UUID sessions are cleared silently => treated as logged out
++    return getAccessToken() || getRefreshToken() ? getStoredUser() : null;
+   });
+   const [loading, setLoading] = useState(false);
+ 
+-  // On refresh, re-validate the stored token against the backend so a
+-  // revoked/expired token doesn't leave the UI in a stale "logged in" state.
++  // On reload, re-validate the stored session against the backend (http.js refreshes an expired access token once).
+   useEffect(() => {
+-    const token = localStorage.getItem('token');
+-    if (token && !user) {
++    if ((getAccessToken() || getRefreshToken()) && !user) {
+       authApi
+         .getMe()
+         .then((me) => {
+           setUser(me);
+-          localStorage.setItem('user', JSON.stringify(me));
++          saveUser(me);
+         })
+-        .catch(() => {
+-          localStorage.removeItem('token');
+-          localStorage.removeItem('user');
+-        });
++        .catch(() => clearSession());
+     }
+     // eslint-disable-next-line react-hooks/exhaustive-deps
+   }, []);
+ 
++  const startSession = (data) => {
++    saveSession(data);
++    setUser(data.user);
++    return data.user;
++  };
++
+   const login = async (username, password) => {
+     setLoading(true);
+     try {
+-      const data = await authApi.login(username, password);
+-      localStorage.setItem('token', data.token);
+-      localStorage.setItem('user', JSON.stringify(data.user));
+-      setUser(data.user);
+-      return data.user;
++      return startSession(await authApi.login(username, password));
+     } finally {
+       setLoading(false);
+     }
+@@ -55,11 +57,7 @@ export const AuthProvider = ({ children }) => {
+   const loginWithGoogle = async (idToken) => {
+     setLoading(true);
+     try {
+-      const data = await authApi.loginWithGoogle(idToken);
+-      localStorage.setItem('token', data.token);
+-      localStorage.setItem('user', JSON.stringify(data.user));
+-      setUser(data.user);
+-      return data.user;
++      return startSession(await authApi.loginWithGoogle(idToken));
+     } finally {
+       setLoading(false);
+     }
+@@ -75,9 +73,9 @@ export const AuthProvider = ({ children }) => {
+   };
+ 
+   const logout = () => {
+-    authApi.logout().catch(() => {});
+-    localStorage.removeItem('token');
+-    localStorage.removeItem('user');
++    const refreshToken = getRefreshToken();
++    if (refreshToken) authApi.logout(refreshToken).catch(() => {});
++    clearSession();
+     setUser(null);
+   };
+ 
+diff --git a/frontend/src/services/authApi.js b/frontend/src/services/authApi.js
+index fce56f1..e320f38 100644
+--- a/frontend/src/services/authApi.js
++++ b/frontend/src/services/authApi.js
+@@ -1,16 +1,19 @@
+ import http from './http';
+ 
++// All auth traffic uses /api/v1/auth (baseURL is '/api'). http.js unwraps {data, meta}, so `res.data` is the payload.
++
+ export const login = (username, password) =>
+-  http.post('/auth/login', { username, password }).then((res) => res.data);
++  http.post('/v1/auth/login', { username, password }).then((res) => res.data);
+ 
++// Resolves with the created user; the page then sends the person to /login (no auto-login).
+ export const register = (username, email, password) =>
+-  http.post('/auth/register', { username, email, password }).then((res) => res.data);
++  http.post('/v1/auth/register', { username, email, password }).then((res) => res.data);
+ 
+ // Sends ONLY the Google ID token; the backend verifies it and derives the identity itself.
+ export const loginWithGoogle = (idToken) =>
+-  http.post('/auth/google', { idToken }).then((res) => res.data);
+-
+-export const logout = () => http.post('/auth/logout');
++  http.post('/v1/auth/google', { idToken }).then((res) => res.data);
+ 
+-export const getMe = () => http.get('/users/me').then((res) => res.data);
++// Revokes this refresh token on the server; the access token just expires.
++export const logout = (refreshToken) => http.post('/v1/auth/logout', { refreshToken });
+ 
++export const getMe = () => http.get('/v1/auth/me').then((res) => res.data);
+diff --git a/frontend/src/services/authStorage.js b/frontend/src/services/authStorage.js
+new file mode 100644
+index 0000000..f0869c0
+--- /dev/null
++++ b/frontend/src/services/authStorage.js
+@@ -0,0 +1,67 @@
++/**
++ * Browser storage for the auth session (B01-P2).
++ * Keys: accessToken (JWT), refreshToken (opaque), user (profile for the UI).
++ * NOTE (residual risk): localStorage is readable by any script running on the page (XSS). Moving the refresh token to an
++ * httpOnly cookie needs CORS credentials + CSRF handling and is an open owner decision (D-5).
++ */
++const ACCESS = 'accessToken';
++const REFRESH = 'refreshToken';
++const USER = 'user';
++const LEGACY_TOKEN = 'token'; // pre-JWT random UUID session
++
++const JWT_SHAPE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*$/;
++
++export const isJwtShaped = (value) => typeof value === 'string' && JWT_SHAPE.test(value);
++
++const read = (key) => {
++  try {
++    return localStorage.getItem(key);
++  } catch {
++    return null;
++  }
++};
++
++export const getAccessToken = () => read(ACCESS);
++export const getRefreshToken = () => read(REFRESH);
++
++export const getStoredUser = () => {
++  try {
++    const raw = read(USER);
++    return raw ? JSON.parse(raw) : null;
++  } catch {
++    return null;
++  }
++};
++
++export const saveTokens = ({ accessToken, refreshToken }) => {
++  localStorage.setItem(ACCESS, accessToken);
++  if (refreshToken) localStorage.setItem(REFRESH, refreshToken);
++};
++
++export const saveSession = ({ accessToken, refreshToken, user }) => {
++  saveTokens({ accessToken, refreshToken });
++  if (user) localStorage.setItem(USER, JSON.stringify(user));
++};
++
++export const saveUser = (user) => localStorage.setItem(USER, JSON.stringify(user));
++
++export const clearSession = () => {
++  [ACCESS, REFRESH, USER, LEGACY_TOKEN].forEach((key) => {
++    try {
++      localStorage.removeItem(key);
++    } catch {
++      /* ignore */
++    }
++  });
++};
++
++/**
++ * Silently drops a legacy (pre-JWT) session: the old UUID `token` key, or any stored access token that is not
++ * JWT-shaped. The user is simply treated as logged out and must log in once.
++ */
++export const purgeLegacySession = () => {
++  const access = read(ACCESS);
++  if (read(LEGACY_TOKEN) !== null || (access !== null && !isJwtShaped(access))) {
++    clearSession();
++  }
++};
+diff --git a/frontend/src/services/http.js b/frontend/src/services/http.js
+index dd8a6eb..2975055 100644
+--- a/frontend/src/services/http.js
++++ b/frontend/src/services/http.js
+@@ -1,4 +1,5 @@
+ import axios from 'axios';
++import { clearSession, getAccessToken, getRefreshToken, saveTokens } from './authStorage';
+ 
+ // Backend base URL (proxied via Vite server to Spring Boot on port 8081)
+ export const API_BASE_URL = '/api';
+@@ -31,9 +32,9 @@ export const isV1Request = (config) => V1_PATH.test(requestPath(config));
+ 
+ const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+ 
+-// Attach the bearer token (if any) to every request automatically.
++// Attach the access token (JWT, if any) to every request automatically.
+ http.interceptors.request.use((config) => {
+-  const token = localStorage.getItem('token');
++  const token = getAccessToken();
+   if (token) {
+     config.headers.Authorization = `Bearer ${token}`;
+   }
+@@ -76,8 +77,88 @@ const normaliseError = (error) => {
+   return Promise.reject(normalised);
+ };
+ 
+-// Centralised error normalisation so pages can show a friendly message
+-// instead of raw axios/console errors.
+-http.interceptors.response.use(unwrapV1, normaliseError);
++// ── Access-token refresh (B01-P2) ────────────────────────────────────────────
++
++// These endpoints never trigger a refresh (a 401 there is the real answer).
++const NO_REFRESH_PATH = /^\/api\/v1\/auth\/(login|register|google|refresh|logout)\/?$/;
++
++// A bare axios instance (no interceptors) so a failing refresh can never recurse into itself.
++const refreshClient = axios.create({ baseURL: API_BASE_URL });
++
++const callRefreshEndpoint = async (refreshToken) => {
++  const res = await refreshClient.post('/v1/auth/refresh', { refreshToken });
++  const pair = res.data?.data;
++  if (!pair?.accessToken || !pair?.refreshToken) throw new Error('INVALID_REFRESH_RESPONSE');
++  saveTokens(pair);
++  return pair.accessToken;
++};
++
++// Runs inside a cross-tab lock when available. If another tab already rotated the token while we waited for the
++// lock, reuse its result instead of presenting an already-rotated refresh token (which would revoke the family).
++const performRefresh = async (startedWith) => {
++  const run = async () => {
++    const current = getRefreshToken();
++    if (!current) throw new Error('NO_REFRESH_TOKEN');
++    if (current !== startedWith && getAccessToken()) return getAccessToken();
++    return callRefreshEndpoint(current);
++  };
++  if (typeof navigator !== 'undefined' && navigator.locks?.request) {
++    return navigator.locks.request('ecogreen-token-refresh', run);
++  }
++  return run();
++};
++
++// Single-flight: every concurrent 401 awaits the SAME refresh promise.
++let refreshPromise = null;
++const refreshOnce = (startedWith) => {
++  if (!refreshPromise) {
++    refreshPromise = performRefresh(startedWith).finally(() => {
++      refreshPromise = null;
++    });
++  }
++  return refreshPromise;
++};
++
++const redirectToLogin = () => {
++  clearSession();
++  if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
++    window.location.assign('/login');
++  }
++};
++
++const shouldRefresh = (error) => {
++  const config = error?.config;
++  if (!config || config._retry || error?.response?.status !== 401) return false;
++  if (!getRefreshToken()) return false;
++  if (NO_REFRESH_PATH.test(requestPath(config))) return false;
++  const apiCode = error.response?.data?.error?.code; // /api/v1 errors carry a code; legacy 401s do not
++  return !apiCode || apiCode === 'UNAUTHENTICATED';
++};
++
++const handleResponseError = async (error) => {
++  if (shouldRefresh(error)) {
++    error.config._retry = true; // at most one refresh + one retry per request
++    // The request was sent with an access token that has since been replaced (a concurrent refresh finished first):
++    // just retry with the current one instead of rotating the refresh token again.
++    const sent = error.config.headers?.Authorization;
++    if (sent && getAccessToken() && sent !== `Bearer ${getAccessToken()}`) {
++      return http(error.config);
++    }
++    try {
++      await refreshOnce(getRefreshToken());
++    } catch {
++      // ANY failed refresh (401/403, 5xx, network error, malformed response, no refresh token) ends the session:
++      // clear storage and go to /login (B01-P2 spec). After clearing there is no refresh token left, so
++      // shouldRefresh() is false for every later 401 and no refresh loop is possible.
++      redirectToLogin();
++      return normaliseError(error);
++    }
++    return http(error.config); // request interceptor re-attaches the new access token
++  }
++  return normaliseError(error);
++};
++
++// Centralised handling: 401 -> single-flight refresh + one retry; everything else -> normalised error with friendlyMessage.
++http.interceptors.response.use(unwrapV1, handleResponseError);
+ 
+ export default http;
