@@ -1,80 +1,116 @@
-# API Reference — EcoGreen backend
+# API reference
 
-Base URL: `http://localhost:8081/api`
+Base URL (development): `http://localhost:8081`. The frontend reaches it through the Vite proxy (`/api/...`).
 
-Xác thực: gửi header `Authorization: Bearer <token>` (token lấy từ
-`POST /auth/login`). Không có token hoặc token sai → `401`. Có token nhưng
-thiếu quyền → `403`. Đây là kiểm tra **phía server** (`AuthGuard`), frontend
-ẩn nút/route chỉ là UX, không phải cơ chế bảo mật.
+This is a reference for the endpoints that exist today. Rules for new endpoints are in [`CLAUDE.md`](./CLAUDE.md); the
+authentication, RBAC and envelope contracts are in [`docs/ai/contracts/`](./docs/ai/contracts).
 
-## Auth
-| Method | Path | Quyền | Mô tả |
-|---|---|---|---|
-| POST | `/auth/register` | Public | `{ username, email, password }` → tạo user, role `USER`, tạo cart rỗng |
-| POST | `/auth/login` | Public | `{ username, password }` → `{ token, user }` |
-| POST | `/auth/logout` | Đã đăng nhập | Thu hồi token hiện tại |
+## Two API generations
 
-## Users
-| Method | Path | Quyền | Mô tả |
-|---|---|---|---|
-| GET | `/users/me` | Đã đăng nhập | Hồ sơ của chính mình |
-| GET | `/users` | ADMIN | Danh sách tất cả user |
-| DELETE | `/users/{id}` | ADMIN | Xoá user (và cart liên quan) |
-
-## Categories
-| Method | Path | Quyền |
+| | `/api/v1/auth/*` (new) | every other `/api/**` (legacy) |
 |---|---|---|
-| GET | `/categories` | Public |
-| POST | `/categories` | ADMIN |
-| PUT | `/categories/{id}` | ADMIN |
-| DELETE | `/categories/{id}` | ADMIN |
+| Success body | `{ "data": …, "meta": null }` | the bare JSON object / array |
+| Error body | `{ "error": { "code", "message", "fields"? } }` | `{ "message": "…" }` |
+| Error codes | `VALIDATION_ERROR`, `BUSINESS_RULE_VIOLATION`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `CONFLICT`, `RATE_LIMITED`, `INTERNAL_ERROR` | HTTP status only |
 
-## Products
-| Method | Path | Quyền | Mô tả |
+The frontend (`services/http.js`) unwraps the new envelope only for URLs starting with `/api/v1/`.
+
+## Authentication and authorization
+
+Send `Authorization: Bearer <accessToken>` (a JWT, 15 minutes). No or invalid token → `401`; valid token without the required
+right → `403`. Authorization is decided on the server; the frontend only hides controls.
+
+| Guard | Meaning |
+|---|---|
+| Public | no token needed |
+| User | any signed-in, active user |
+| Owner or Admin | the order's owner, or a user with role `ADMIN` |
+| Admin | role `ADMIN` (legacy `requireAdmin`; a `MANAGER` is denied) |
+
+Permission-based checks (`requirePermission`) exist in the backend but **no endpoint uses them yet**.
+
+## Auth — `/api/v1/auth`
+
+| Method | Path | Access | Body → result |
 |---|---|---|---|
-| GET | `/products` | Public | Chỉ trả sản phẩm `ACTIVE` |
-| GET | `/products/{id}` | Public | |
-| GET | `/products/admin/all` | ADMIN | Bao gồm cả `INACTIVE` |
-| POST | `/products` | ADMIN | |
-| PUT | `/products/{id}` | ADMIN | |
-| DELETE | `/products/{id}` | ADMIN | Soft-delete → chuyển `INACTIVE` |
+| POST | `/register` | Public | `{ username, email, password }` → `201` user (role `CUSTOMER`, empty cart); no automatic sign-in |
+| POST | `/login` | Public | `{ username, password }` → `{ accessToken, refreshToken, expiresIn, user }`; `429` + `Retry-After` after repeated failures |
+| POST | `/google` | Public | `{ idToken }` → same as login; `503` when `GOOGLE_CLIENT_ID` is not configured |
+| POST | `/refresh` | Public | `{ refreshToken }` → `{ accessToken, refreshToken, expiresIn }`; the old refresh token is revoked |
+| POST | `/logout` | Public | `{ refreshToken }` → `data: null`; revokes that refresh token |
+| GET | `/me` | User | current user |
 
-## Cart
-Giỏ hàng luôn gắn với user đã xác thực từ token — **không** nhận `userId`
-từ client.
+`user` = `{ id, username, email, active, roles, permissions }`. Details and semantics: `docs/ai/contracts/B01-auth.md`.
 
-| Method | Path | Quyền | Mô tả |
+## Products — `/api/products`
+
+| Method | Path | Access | Notes |
 |---|---|---|---|
-| GET | `/cart` | Đã đăng nhập | Trả `{ cartId, items[], totalPrice, totalItems }` |
-| POST | `/cart/items` | Đã đăng nhập | `{ productId, quantity }` — kiểm tra tồn kho từ DB |
-| PUT | `/cart/items/{id}` | Đã đăng nhập | `{ quantity }` |
-| DELETE | `/cart/items/{id}` | Đã đăng nhập | |
-| DELETE | `/cart` | Đã đăng nhập | Xoá toàn bộ giỏ |
+| GET | `/` | Public | active products only; no paging or search parameters |
+| GET | `/{id}` | Public | |
+| GET | `/admin/all` | Admin | includes inactive products |
+| POST | `/` | Admin | `{ name, description, price, stockQuantity, image, categoryId }` |
+| PUT | `/{id}` | Admin | same fields plus `status` (`ACTIVE` / `INACTIVE`) |
+| DELETE | `/{id}` | Admin | soft delete: status becomes `INACTIVE` |
 
-## Orders
-| Method | Path | Quyền | Mô tả |
+## Categories — `/api/categories`
+
+| Method | Path | Access | Body |
 |---|---|---|---|
-| POST | `/orders` | Đã đăng nhập | Checkout: `{ customerName, customerPhone, shippingAddress, paymentMethod }`. Transaction: validate stock → tạo order → tạo order_items (giá hiện tại = giá lịch sử) → trừ kho → tạo payment PENDING → xoá giỏ |
-| GET | `/orders/my` | Đã đăng nhập | Đơn hàng của chính mình |
-| GET | `/orders` | ADMIN | Toàn bộ đơn hàng |
-| GET | `/orders/{id}` | Chủ đơn hoặc ADMIN | |
-| PUT | `/orders/{id}/status` | ADMIN | `{ status }` |
+| GET | `/` | Public | |
+| POST | `/` | Admin | `{ name, description }` |
+| PUT | `/{id}` | Admin | `{ name, description }` |
+| DELETE | `/{id}` | Admin | |
 
-## Payments
-Mô phỏng — không có cổng thanh toán thật.
+## Cart — `/api/cart` (User; always the caller's own cart)
 
-| Method | Path | Quyền | Mô tả |
+| Method | Path | Body |
+|---|---|---|
+| GET | `/` | → `{ cartId, items[], totalPrice, totalItems }` |
+| POST | `/items` | `{ productId, quantity? }` (default 1); stock is checked on the server |
+| PUT | `/items/{id}` | `{ quantity }` |
+| DELETE | `/items/{id}` | |
+| DELETE | `/` | empties the cart |
+
+## Orders — `/api/orders`
+
+| Method | Path | Access | Notes |
 |---|---|---|---|
-| GET | `/payments/order/{orderId}` | Chủ đơn hoặc ADMIN | |
-| POST | `/payments/order/{orderId}/pay` | Chủ đơn hoặc ADMIN | "Pay now" — luôn thành công (trừ khi đơn đã bị huỷ), sinh `transactionId` giả `MOCK-<uuid>` |
+| POST | `/` | User | `{ customerName, customerPhone, shippingAddress, paymentMethod? }` (default `COD`). One transaction: validate stock → create order and items with price snapshot → deduct stock → create `PENDING` payment → empty cart |
+| GET | `/my` | User | the caller's orders |
+| GET | `/` | Admin | all orders |
+| GET | `/{id}` | Owner or Admin | with items |
+| PUT | `/{id}/status` | Admin | `{ status }` — `PENDING`, `CONFIRMED`, `PAID`, `CANCELLED`; transitions are **not** validated and stock is not restored on cancel |
 
-## Admin
-| Method | Path | Quyền | Mô tả |
+## Payments — `/api/payments` (Owner or Admin)
+
+Payment is **simulated**; there is no gateway and no webhook.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/order/{orderId}` | payment of the order |
+| PUT | `/order/{orderId}/method` | `{ method }` (the UI offers `COD`, `VIETQR`, `MOMO`, `VNPAY`); rejected once paid |
+| POST | `/order/{orderId}/pay` | always succeeds unless the order is cancelled; stores a fake `MOCK-<uuid>` transaction id and marks the order `PAID` |
+
+## Returns — `/api/returns`
+
+| Method | Path | Access | Notes |
 |---|---|---|---|
-| GET | `/admin/stats` | ADMIN | `{ totalUsers, totalProducts, totalOrders }` |
+| POST | `/` | User | `{ orderId, reason, description?, imageUrl? }`; only for the caller's own **paid** order; one pending request per order |
+| GET | `/my` | User | the caller's requests |
+| GET | `/` | Admin | all requests |
+| PUT | `/{id}/status` | Admin | `{ status, adminNote }` — `PENDING`, `APPROVED`, `REJECTED`; approving does not refund or restock |
 
-## Định dạng lỗi
+## Users and admin
 
-Mọi lỗi trả về `{ "message": "..." }` với mã HTTP tương ứng
-(`400`/`401`/`403`/`404`/`409`/`500`) — không bao giờ trả `200` cho một
-thao tác thất bại.
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| GET | `/api/users` | Admin | all users (with roles and permissions) |
+| DELETE | `/api/users/{id}` | Admin | hard delete |
+| GET | `/api/admin/stats` | Admin | `{ totalUsers, totalProducts, totalOrders }` |
+| GET | `/api/admin/reports/revenue-over-time` | Admin | query `range`, `groupBy` |
+| GET | `/api/admin/reports/orders-by-status` | Admin | |
+| GET | `/api/admin/reports/top-products` | Admin | query `limit` (default 5), `range` |
+| GET | `/api/admin/reports/summary` | Admin | query `range` |
+
+`GET /api/users/me` and the former `/api/auth/*` endpoints no longer exist; use `/api/v1/auth/me` and `/api/v1/auth/*`.

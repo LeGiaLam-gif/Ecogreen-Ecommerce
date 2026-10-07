@@ -1,185 +1,42 @@
-# EcoGreen — Agent Prompts V2
+# EcoGreen — Module specifications (remaining work)
 
-> Self-contained specification for AI coding agents working on the EcoGreen repository.
-> Stack (fixed): **React 19 + Vite + React Router (JavaScript/JSX)** · **Spring Boot 4.0.x, Java 21, Maven** · **PostgreSQL**.
-> Baseline inspected: `main` @ `ce04d30`. The existing source code is the implementation reality; this file is the target specification.
-> This file does NOT replace `docs/03_AGENT_PROMPTS.md` (V1). V1 is left untouched.
+This file is the single place that describes **work that is not implemented yet**: the module order, the migration ranges
+and one specification per remaining module. It replaces the former `00_GAP_ANALYSIS.md`, `02_DEVELOPMENT_PLAN.md`,
+`03_AGENT_PROMPTS.md` (V1) and `03_AGENT_PROMPTS_V2.md`.
 
-## What changed from V1
+How an AI agent must work (workflow, scope, API contract, migration policy, testing and reporting rules) is defined in
+[`CLAUDE.md`](../../CLAUDE.md), **not** here. Permanent contracts of finished modules are in [`contracts/`](./contracts).
 
-1. **Code-first workflow.** Every module prompt now follows `READ → INSPECT CURRENT CODE → IDENTIFY CONFLICTS → PLAN → IMPLEMENT → TEST WHAT IS POSSIBLE → REVIEW DIFF → REPORT`. V1 assumed the code already matched the prompt; it does not.
-2. **B13 is deferred.** Docker/Redis/RabbitMQ/CI/Jacoco/Actuator/observability are a later phase (B13) and block nothing in B01–B12. Where a module needs a *minimal* piece (e.g. running its migration), the prompt says exactly how little to do.
-3. **Corrected dependency order.** V1 had B04 (Checkout) calling `createPendingOrder()` and `PENDING_PAYMENT` that only B05 creates, and B03 depending on B02 for no technical reason. V2 distinguishes **hard / soft / temporary-compatibility** dependencies and reorders: `B03 → B05 → B04`.
-4. **Explicit optimization requirements.** Each relevant module has an "Efficiency review" checklist (N+1, pagination, indexes, client-side filtering, re-renders…) with the rule *evidence first, no speculative infrastructure*.
-5. **Stronger migration compatibility.** Every migration documents legacy-row impact, nullability, constraint ordering, data-loss risk, empty-DB vs existing-DB behaviour. V2 fixes real V1 data-integrity bugs (legacy `CONFIRMED` mis-mapped, legacy `PENDING` stock double-deduction, missing order price columns, Hibernate-generated CHECK constraints, `ddl-auto=update` vs manual migrations).
-6. **One consistent API contract.** One target convention (`/api/v1`, `{data,meta}`, `{error:{...}}`, 0-based pagination) with a deterministic transition rule for legacy `/api/**` endpoints. V1 mixed `/api`, `/api/v1`, bare arrays and envelopes.
-7. **Stronger frontend/backend coordination.** A backend change that alters a contract must either migrate its frontend callers in the same task or keep a documented temporary compatibility path. Every module has a "Frontend impact" section.
-8. **Explicit Git/export workflow.** The project owner handles Git/GitHub. Agents never push, merge, force-push or rewrite history; they report changed files and/or export a patch.
-9. **Clearer scope control.** Each module has ALLOWED / REQUIRED-TO-CHECK / FORBIDDEN lists using the real repository layout (`backend/src/main/java/com/example/backend/...`, `frontend/src/...`). The nonexistent `modules/*` and `apps/web/*` layouts are gone.
-10. **Truthful test reporting.** Agents must state which tests were actually run, which could not run and why. Claiming a test passed that was not executed is a violation.
+Use: give an agent `CLAUDE.md` + sections 1–3 of this file + **exactly one** module specification from section 5 or 6.
 
----
+## 1. Status (verified against the code at commit `b212ecc`)
 
-## 0. How to use this document
+| Block | Status | Evidence in the repository |
+|---|---|---|
+| B01-P1 Google ID-token verification | **Done** | `security/GoogleApiIdentityVerifier` verifies signature, issuer, audience and expiry; Google login is disabled (fails closed) when `GOOGLE_CLIENT_ID` is empty |
+| B01-F1 API foundation | **Done** | `api/` package, dual-mode `GlobalExceptionHandler`, `http.js` unwrapping — contract `contracts/B01-api-foundation.md` |
+| B01-P2 JWT + rotating refresh tokens | **Done** | `JwtService`, `RefreshTokenService`, `/api/v1/auth/*` — contract `contracts/B01-auth.md` |
+| B01-P3 Permission-based RBAC | **Done** (one open decision, see 4) | `Permissions.java`, `AuthGuard.requirePermission`, V4–V6 — contract `contracts/B01-rbac.md`. **No controller uses `requirePermission` yet**; seven controllers still call `requireAdmin()` |
+| B02 Catalog | Not started | `Product` has no slug/sku/brand/compare price/images table; categories are flat; `GET /api/products` has no search or paging; `Home.jsx` loads every product |
+| B05 Order | Not started | order status is `PENDING/CONFIRMED/PAID/CANCELLED`; `OrderService.updateStatus` does not validate transitions; no status history |
+| B03 Inventory | Not started | stock is `products.stock_quantity`, decremented at checkout; nothing restores it |
+| B08 Customer | Not started | `UserController` only lists and deletes; no addresses; no enable/disable endpoint |
+| B04 Cart & Checkout | Not started | no discounts or shipping cost; legacy `POST /api/orders` and `/api/cart/*` |
+| B06 Payment | Not started | `PaymentService.payNow` is a mock that always succeeds; no gateway, webhook or refund |
+| B07 Return & Refund | Not started | `ReturnRequest` covers a whole order, one image, no refund/restock |
+| B09 Analytics, B10 Notification | Not started | no `analytics_events`/`notifications`, no event classes |
+| B11 / B12 UI slices | Not started | storefront/admin still call legacy endpoints; `AdminDashboard.jsx` is a single large component |
+| B13 Infra | Not started | no Flyway, Dockerfile, CI workflow, actuator, Jacoco; no frontend tests |
 
-- Give a coding agent: **Section 1 (Global Rules)** + **Section 2 (Dependency model)** + **exactly one module prompt**.
-- Do not give an agent several modules at once.
-- Section 1 rules override anything in a module prompt that appears to conflict, unless the module prompt explicitly says "OVERRIDES GLOBAL RULE X".
-- Product-owner decisions that are still open are listed in **Section 12**. If an open decision blocks you, use the stated default and report it. Do not invent a different one.
+## 2. Dependency model
 
----
+Definitions — **HARD**: cannot be merged correctly without the other. **SOFT**: works without it using a documented fallback.
+**TEMP-COMPAT**: needs a minimal, labelled stand-in that a named later module removes.
 
-## 1. GLOBAL RULES (apply to every module)
+### 2.1 Corrections to the original plan (why the order below is what it is)
 
-### 1.1 Mandatory workflow
-
-```
-READ → INSPECT CURRENT CODE → IDENTIFY CONFLICTS → PLAN → IMPLEMENT → TEST WHAT IS POSSIBLE → REVIEW DIFF → REPORT
-```
-
-1. **READ**: `CLAUDE.md`, this file (Section 1, 2, your module), and the existing docs under `docs/`.
-2. **INSPECT CURRENT CODE**: open every file listed under "REQUIRED TO CHECK" in your module. Do not assume the code matches this prompt. Run `git status`/`git log -1` (read-only) to know the baseline.
-3. **IDENTIFY CONFLICTS**: write down every difference between this prompt and the real code *before* editing. Preserve the **business requirement**; adapt the **implementation** to the real structure. Do not silently choose the prompt over the code or the code over the prompt.
-4. **PLAN**: list the files you will create/modify (must be inside ALLOWED), the migrations, the API changes, the frontend changes, the tests. Keep the plan short.
-5. **IMPLEMENT**: smallest change that satisfies the requirement. No framework changes, no unrelated renames, no broad refactors.
-6. **TEST WHAT IS POSSIBLE**: see 1.8.
-7. **REVIEW DIFF**: read your own full diff. Look for: files outside ALLOWED, leftover debug code, secrets, weakened security, missing tests, contract changes without frontend updates.
-8. **REPORT**: use the report template in 1.10.
-
-If a prerequisite is missing: implement **only the minimum** the current module needs, mark it `// TEMPORARY-COMPAT(<module>): <why>; remove when <condition>`, and list it in the report. Never expand into the B13 roadmap.
-
-### 1.2 Fixed technology (do not change)
-
-React + Vite + React Router + JavaScript/JSX; Spring Boot + Java 21 + Maven; PostgreSQL. No Next.js, NestJS, TypeScript, Gradle, MySQL, or new ORM. Adding a library is allowed only when the module prompt names it or you justify it in the report as the smallest way to meet a requirement (e.g. a JWT library, a Google token verifier, `spring-boot-starter-validation`).
-
-### 1.3 Git / export workflow (the project owner manages Git)
-
-Agents MUST NOT: push, force-push, merge, rebase, rewrite history, delete/modify other branches, create PRs, or require GitHub write access.
-Agents MAY (only if the owner's environment allows, and only locally): `git status`, `git diff`, `git log`, and create a local working branch if the owner asked for one.
-At completion, give the owner an integration-ready result using ONE of:
-- a list of changed/created/deleted files with a one-line reason each, **and/or**
-- a patch: `git diff > <module>.patch` (only if a git working tree exists and the owner asked), **or** a clear file listing so the owner can copy the files.
-Never commit unless the owner explicitly says so. Do not modify `.git/`.
-
-### 1.4 Scope control (applies to every module)
-
-Each module defines **ALLOWED**, **REQUIRED TO CHECK**, **FORBIDDEN**.
-- A file outside ALLOWED may be changed only if (a) the change is the minimum needed for the module to compile or for a contract change to not break the frontend, (b) you explain why in the report under "Shared/out-of-scope changes", and (c) you name which module owns that file. Never leave two competing implementations of the same thing.
-- Shared files (owner module in parentheses): `pom.xml` (whichever module adds its own dependency; additive only), `application.properties` (additive only; never change existing values without a stated reason), `GlobalExceptionHandler` and API envelope classes (**B01-F1**), `frontend/src/services/http.js` and `AuthContext.jsx` (**B01**), `.env.example` (additive; every new env var must be added), `docs/ai/contracts/*` (the owning module only).
-- No refactor merely because another architecture seems better.
-
-### 1.5 Repository reality (what exists today — verify, it may have changed)
-
-- Backend package `com.example.backend` with layered folders: `controller/ service/ repository/ entity/ dto/ security/ exception/ config/`. No `modules/` folder. Controllers use `@Autowired` field injection and `Map<String,Object>`/`Map<String,String>` request bodies. DTOs expose `from(...)` static factories.
-- Auth today: `AuthTokenStore` (in-memory `ConcurrentHashMap<UUID,userId>`), `AuthInterceptor` (resolves bearer → `CurrentUser(userId, isAdmin)`, registered on `/api/**`), `AuthGuard.requireUser/requireAdmin/isAdmin`, roles `USER`/`ADMIN` (`Role.USER`, `Role.ADMIN` constants, seeded by `DataLoader` and `init-postgres.sql`), BCrypt via `PasswordHasher`/`spring-security-crypto`.
-- Schema today: `database/init-postgres.sql` (run by docker entrypoint) **plus** `spring.jpa.hibernate.ddl-auto=update`. No Flyway/Liquibase. Money is `DECIMAL(12,2)`/`BigDecimal`. Order status `PENDING|CONFIRMED|PAID|CANCELLED`; Product status `ACTIVE|INACTIVE`; Payment status `PENDING|SUCCESS|FAILED`; Return status `PENDING|APPROVED|REJECTED`.
-- Stock today: `products.stock_quantity`, decremented in `OrderService.checkout()` at order creation (not at payment). **Nothing ever restores stock** (cancel/return do not).
-- Checkout today: `POST /api/orders` body `{customerName, customerPhone, shippingAddress, paymentMethod}`; creates `Order(PENDING)`, `OrderItem`s with price snapshot, a `Payment(PENDING)`, clears the cart. `PaymentService.payNow()` is a mock that always succeeds and sets order `PAID`.
-- Frontend: `frontend/src/{pages,components,context,services,utils}`; axios instance `services/http.js` (adds `Authorization: Bearer <localStorage.token>`, normalises errors to `friendlyMessage` using `error.response.data.message`); `AuthContext` stores `token` and `user` in `localStorage`; `ProtectedRoute` is UX only; `Home.jsx` loads **all** products and filters client-side; `AdminDashboard.jsx` (~1100 lines) loads all products/orders/returns and filters client-side; product images are bare filenames resolved by `utils/imageResolver.js` against `src/assets/products/` or full URLs.
-- Tests today: one empty `contextLoads()`. Frontend has no tests and no test runner.
-- Secrets today: DB password `123456` is committed in `application.properties`/`docker-compose.yml`; `database/seed-data.sql` contains `admin/admin123`. **Do not make this worse; do not add new committed secrets.**
-
-### 1.6 ONE project-wide API contract
-
-**Target convention** (all new/rewritten endpoints MUST follow it; no module may invent another):
-
-| Aspect | Rule |
-|---|---|
-| Base path | `/api/v1/...` |
-| Resources | plural nouns, kebab-case (`/api/v1/order-items`); no verbs in paths except explicit state actions as sub-resources (`POST /orders/{id}/cancel`) |
-| Success (single) | `{ "data": { ... }, "meta": null }` |
-| Success (list) | `{ "data": [ ... ], "meta": { "page": 0, "size": 20, "totalElements": 134, "totalPages": 7 } }` |
-| Error | `{ "error": { "code": "VALIDATION_ERROR", "message": "…", "fields": { "price": "must be >= 0" } } }` (`fields` only for validation) |
-| Error codes | 400 `VALIDATION_ERROR`, 400 `BUSINESS_RULE_VIOLATION`, 401 `UNAUTHENTICATED`, 403 `FORBIDDEN`, 404 `NOT_FOUND`, 409 `CONFLICT`, 429 `RATE_LIMITED`, 500 `INTERNAL_ERROR` (never leak exception text/stack/SQL) |
-| Pagination | every list endpoint: `page` (0-based, default 0), `size` (default 20, max 100), `sort=field,asc|desc`; whitelist sortable fields (never pass raw `sort` to the DB) |
-| Money | JSON number in VND (`BigDecimal`, `DECIMAL(12,2)` in DB). **Decision: keep `DECIMAL(12,2)`; V1's "BIGINT money" convention is withdrawn** (it would rewrite every price column for no benefit). Never use `double`/`float`. |
-| Time | UTC ISO-8601 in JSON; DB `TIMESTAMP`; see open decision D-9 about the legacy `Asia/Ho_Chi_Minh` JVM default |
-| IDs | numeric `id` in paths; no sequential-ID trust for authorization — ownership is always checked server-side |
-| Validation | `jakarta.validation` on request DTOs (add `spring-boot-starter-validation` once, in B01-F1), typed request DTOs instead of `Map<String,…>` for every endpoint you create or rewrite |
-
-**Transition rule for legacy endpoints (`/api/**`, bare JSON, `{message}` errors):**
-1. Legacy endpoints keep working until the module that owns them rewrites them.
-2. A module that rewrites an endpoint creates the `/api/v1` version **and migrates every frontend caller in the same task**, then removes the legacy path — unless the module prompt lists a `TEMPORARY-COMPAT` alias with a removal condition.
-3. `GlobalExceptionHandler` produces the new error shape **only for requests under `/api/v1/**`**; legacy paths keep `{message}` so the existing frontend is not broken mid-migration. (**Owner: B01-F1.**)
-4. `frontend/src/services/http.js` unwraps `{data,meta}` and normalises `{error}` **only for URLs starting with `/api/v1/`**; other URLs are untouched. After unwrap, service functions return the plain value (or `{items, meta}` for lists) so page components stay simple. (**Owner: B01-F1.**)
-5. Final state (end of B12): no legacy `/api/**` endpoint remains except explicitly documented compat aliases.
-
-**Contract documents.** Every module publishes ONE contract file at **`docs/ai/contracts/<module>.md`** (e.g. `docs/ai/contracts/B05-order.md`). It contains: entities/columns, public Java signatures other modules may call, endpoints (path, method, request, response, errors, permission), events, status enums, and "Requests for contract changes" (other modules append requests here; they do not edit the owner's code). Do **not** create `modules/*/CONTRACT.md`.
-
-### 1.7 Database migration policy
-
-**Two separate things — do not conflate them:**
-- **Migration FILE definition** (always required when schema changes): versioned SQL at `backend/src/main/resources/db/migration/V<n>__<snake_name>.sql` (Flyway-compatible naming), inside your assigned version range (Section 3). One file = one logical change. Never edit a migration that another module or the owner already applied; add a new one.
-- **Migration EXECUTION infrastructure** (Flyway wiring, CI): deferred to B13. Until then:
-  - Migration files MUST be **idempotent and order-safe** (`ADD COLUMN IF NOT EXISTS`, `DROP CONSTRAINT IF EXISTS`, `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, guarded `UPDATE`s) because `ddl-auto=update` may already have created columns/tables from entities, and the owner may run files by hand with `psql`.
-  - Do not change `spring.jpa.hibernate.ddl-auto`. Add new entities/columns **consistently in both** the JPA entity and the migration file so either path yields the same schema.
-  - Hibernate 6 may have generated its own CHECK constraints for `@Enumerated(STRING)` columns (names such as `orders_status_check`, `products_status_check`) on databases created by `ddl-auto` rather than by `init-postgres.sql`. Before widening any enum, a migration must drop **both** the `init-postgres.sql` constraint name (e.g. `chk_orders_status`) and any Hibernate-generated one (look them up in `pg_constraint` inside a `DO $$ … $$` block; do not hard-code a guess).
-  - A module may run its own migration against a local database only if the environment allows; otherwise state "migration not executed".
-- **Minimal Flyway activation (optional, owner-triggered).** If the owner asks for automatic execution before B13, the smallest acceptable change is: add `flyway-core` + `flyway-database-postgresql`, `spring.flyway.baseline-on-migrate=true`, `spring.flyway.baseline-version=<last manually applied>`, keep `ddl-auto=update` until B13 flips it to `validate`. Whoever does it records it in their report; other modules must not duplicate it.
-
-**Every migration file MUST begin with a comment block documenting:**
-```
--- LEGACY DATA IMPACT:        what happens to existing rows
--- NULLABILITY:               new NOT NULL columns: how existing rows are backfilled BEFORE the constraint
--- CONSTRAINT ORDER:          backfill → add constraint (never the reverse)
--- DATA-LOSS / ROLLBACK RISK: what cannot be undone; the manual rollback SQL or "none possible"
--- EMPTY DATABASE:            works? (yes/no + why)
--- EXISTING DATABASE:         works? (yes/no + why)
-```
-Do not drop a column that contains data in the same release that stops using it; mark the entity field `@Deprecated`, stop writing it, and schedule removal in B13 or a later explicit task.
-
-### 1.8 Testing rules (truthful reporting)
-
-- Tests prove **business behaviour**, not coverage. Prefer: JUnit 5 + Mockito for services; `@SpringBootTest`/`@DataJpaTest` with real PostgreSQL only when concurrency or SQL behaviour is the point (see B03).
-- If Testcontainers/Docker is unavailable, concurrency/SQL tests that need a real DB may be written but marked `@Disabled("requires PostgreSQL")` **only with the reason in the report**; the report must say they were NOT run.
-- Frontend has no test runner. **Do not add one unless the module prompt says so.** Minimum frontend verification: `npm run lint` and `npm run build` where the environment allows, plus the manual verification steps in the module's DoD.
-- Things an environment may not allow: Maven Central/npm registry access, Docker, Google credentials, payment sandbox credentials, SMTP. State which applied.
-- **Never claim a test/build/lint passed unless you ran it and saw it pass.** Report: command, result, and for failures the honest reason. Do not delete or weaken existing tests to get green.
-
-### 1.9 Cross-cutting requirements
-
-**Security (always consider):** authentication; authorization at the backend (frontend guards are UX only); ownership checks on every `/{id}` resource that belongs to a user; JWT/token validation; secrets only from environment (never committed; add the variable *name* to `.env.example`); request validation; file-upload validation (type allow-list by content sniffing not just extension, size limit, random server-side filename, no path from client, no executable content served); webhook signature verification and idempotency; injection safety (parameterised queries/JPQL only, no string-concatenated SQL, whitelist `sort`); no sensitive data in responses/logs (no password hashes, tokens, raw gateway payloads to clients); no unsafe error messages; never trust client-supplied price/total/status/userId/email. **Never weaken security to make a test pass or to keep an old client working.**
-
-**Efficiency review (evidence first):** in each module do a short, concrete review of the code you touch for the items under that module's "Efficiency review". Rules:
-1. Do **not** optimise blindly. For each change, report: *what was inefficient, why (evidence: query count, payload size, loop), what changed, the trade-off.*
-2. Prefer: `JOIN FETCH`/`@EntityGraph` or batched queries over per-row lookups; pagination over `findAll()`; DB-side filtering over client-side; indexes backed by an actual query; smaller DTOs.
-3. **Do not introduce Redis, caches, queues, or new infrastructure** for the sake of optimisation. An in-method precomputation or a query rewrite is fine; a new service is not.
-4. If you find an inefficiency outside your scope, **report it**, do not fix it.
-
-**Legacy compatibility (every migration/breaking change):** state in the report (a) what happens to existing rows, (b) what happens to old clients, (c) whether compat code is temporary and the **removal condition**, (d) which data fields you deliberately kept.
-
-### 1.10 Completion report template (mandatory)
-
-```
-MODULE: <Bxx name>
-1. Summary of what changed (business terms)
-2. Conflicts found between this prompt and the code, and how each was resolved
-3. Files created / modified / deleted (path — reason)
-4. Shared/out-of-scope changes (path, why, owning module)
-5. Migrations (file, range check, legacy impact, empty-DB ok?, existing-DB ok?, executed? yes/no)
-6. API changes (old → new, status codes, error codes, permissions) + frontend callers updated (paths)
-7. Frontend changes (files, behaviour)
-8. Efficiency review (for each item: finding → evidence → change → trade-off, or "nothing found")
-9. Security review (items considered, residual risks)
-10. Tests: written (names) / EXECUTED (command + result) / NOT EXECUTED (reason)
-11. Build/lint: executed? result?
-12. TEMPORARY-COMPAT code (location, why, removal condition)
-13. Known limitations / open decisions hit (Section 12 IDs) / defaults used
-14. Contract file published: docs/ai/contracts/<module>.md
-15. Suggested next module
-16. How the owner integrates the result (file list or patch)
-```
-
----
-
-## 2. Dependency model (re-derived from the actual code)
-
-**Definitions**
-- **HARD**: module cannot be implemented/merged correctly without the other being merged first.
-- **SOFT**: module works without it (using a documented fallback); integrating later is an improvement.
-- **TEMP-COMPAT**: module needs a stand-in for something not yet built; the stand-in is minimal, labelled, and removed by a named later module.
-
-### 2.1 What the code shows (and what V1 got wrong)
+Historical rationale: the first plan assumed things the code contradicted. B01 is now complete, so rows that talk about
+`requireAdmin()` "until B01-P3" are superseded by the note at the top of section 5.
 
 | V1 claim | Reality in code | V2 resolution |
 |---|---|---|
@@ -213,13 +70,13 @@ MODULE: <Bxx name>
 | B12 Admin UI | the backend module each slice manages | — | slices, see B12 |
 | B13 Deferred Infra | none (runs after or beside) | — | flips `ddl-auto`, activates Flyway, removes deprecated columns |
 
-### 2.3 Required development order (implementation dependency order — NOT a priority ranking)
+### 2.3 Required development order (implementation dependency order, not a priority ranking)
 
 ```
-Step 1   B01-P1   Google login hotfix                 (can start immediately; independent)
-Step 2   B01-F1   API foundation (envelope/errors/validation/pagination/http.js)
-Step 3   B01-P2   JWT access + refresh tokens, /api/v1/auth, frontend auth migration
-Step 4   B01-P3   Permission-based RBAC
+Step 1   B01-P1   Google login hotfix                 DONE
+Step 2   B01-F1   API foundation (envelope/errors/validation/pagination/http.js)   DONE
+Step 3   B01-P2   JWT access + refresh tokens, /api/v1/auth, frontend auth migration   DONE
+Step 4   B01-P3   Permission-based RBAC                  DONE
 Step 5   B02      Catalog                             ┐ may run in parallel
 Step 6   B05      Order state machine (+InventoryGateway port, legacy adapter)   ┘ (different files)
 Step 7   B03      Inventory reservation model (replaces adapter)
@@ -229,16 +86,17 @@ Step 10  B06      Payment (gateway abstraction, webhook, refunds)
 Step 11  B07      Return & Refund
 Step 12  B09      Analytics            ┐ may run in parallel, read-only
 Step 13  B10      Notification         ┘
-Step 14  B11/B12  Frontend slices — each slice runs right after the backend module it needs (B11/B12 detail below);
+Step 14  B11/B12  Frontend slices — each slice runs right after the backend module it needs (B11/B12 drafts in section 6);
                   they are NOT a single step at the end
 Step 15  B13      Deferred infrastructure (Flyway activation, Docker, CI, Redis/RabbitMQ only if justified, …)
-Step 16  FINAL    Cross-system efficiency pass (report-driven; see Section 10)
+Step 16  FINAL    Cross-system efficiency pass (report-driven; no specification written)
 ```
 Rationale for the order: **business correctness** (order state machine, inventory) before **security hardening of every flow** is already satisfied by Steps 1–4 (security-critical auth work is first and independent); **data integrity** (B05→B03→B04→B06→B07) follows the money/stock chain; **API contracts** are fixed once in Step 2 and reused; **frontend integration** happens inside each module (minimum caller migration) plus B11/B12 slices; **analytics/notification** consume stable events; **infrastructure** and **final optimisation** come last.
 
----
-
 ## 3. Migration version ranges (namespaces, not execution order)
+
+Already used: `V2` (`users.google_sub`), `V3` (`refresh_tokens`), `V4`–`V6` (permissions, `CUSTOMER`/`MANAGER`, seed). These
+belong to B01 and are final.
 
 `V1` = baseline = the current `database/init-postgres.sql` (**no module creates V1**; B13 or the owner's minimal Flyway activation creates `V1__baseline.sql` as a verbatim copy).
 
@@ -260,209 +118,41 @@ Rules:
 1. A migration may reference (FK) only tables owned by modules that come **earlier in the dependency order of Section 2.3**.
 2. Numeric order ≠ build order for B08 (V70 is built before B04's V40). When Flyway is activated the owner MUST set `spring.flyway.out-of-order=true` (or apply files manually in dependency order). Each module's report states which prior migrations it assumes.
 3. A module must never use a number outside its range. Need more? Report it; do not borrow.
-4. Idempotency, documentation header and EMPTY/EXISTING-database statements are mandatory (Section 1.7).
+4. Idempotency, documentation header and EMPTY/EXISTING-database statements are mandatory (see `CLAUDE.md`, Database and migrations).
 
----
+## 4. Decisions referenced in the specs but never written down
 
-# MODULE PROMPTS
+The original V2 prompt pointed to an "open decisions" section (its "Section 12") that was never written. The IDs that are
+still mentioned in the repository, with what is actually known:
 
-Every module prompt below uses the same 13-point structure: **Problem · Why it matters · Required behaviour · Inspect · Database · API · Frontend · Security · Compatibility/migration · Tests · Must NOT change · Definition of Done · Report**, preceded by Dependencies and Scope. Section 1 (Global Rules) applies in full to each one.
+| ID | Where it appears | Known content |
+|---|---|---|
+| D-1 | B04 | customer totals change once shipping is enabled; must be documented when B04 ships |
+| D-5 | `contracts/B01-auth.md` §8 | refresh token in an httpOnly cookie instead of `localStorage` — **open**, not switched |
+| D-6 | `contracts/B01-rbac.md` §3 | `MANAGER` = all permissions except `system:configure`, `audit:view`, `user:disable` — implemented as the default |
+| D-9 | `CLAUDE.md` (API contract) | the legacy `Asia/Ho_Chi_Minh` JVM/DB timezone default vs UTC in JSON — **open** |
+| permission loading | `contracts/B01-rbac.md` §7 | the spec asked for one joined query when issuing a token; the implemented EAGER + `@BatchSize` mapping was never measured — **open** (options 1–4 in that contract) |
 
----
+If a task is blocked by one of these, use the stated default, report it, and do not invent a different decision.
 
-## B01 — Authentication & RBAC
+### Backlog items no module specification covers
 
-B01 is delivered in **four ordered sub-tasks**. Give an agent ONE sub-task at a time. P1 is independent and can start immediately.
+From the original gap analysis; each needs a new, explicitly assigned task:
 
-### B01-P1 — Google login security hotfix (frontend + backend, one task)
+- **Audit log of admin actions** (`audit_logs` table and writer). The `audit:view` permission exists but nothing records or serves data.
+- Externalise datasource and CORS settings (`application.properties` hard-codes the DB URL/user/password and `WebConfig` allows only `http://localhost:5173`).
+- HTTPS / secret management for real deployments.
+- Login throttling is per instance and in memory; there is no rate limit on other endpoints.
 
-**Dependencies**: none (HARD: none · SOFT: none).
+## 5. Module specifications (written against the real code, ready to use)
 
-**Problem (current code).** `AuthService.loginWithGoogle()` never verifies anything with Google. It base64-decodes the middle part of `request.credential` with a regex (`extractJsonField`), silently ignores any failure (`catch (Exception ignored)`), and then trusts `request.email`, `name`, `googleId`, `avatar` supplied by the client. The frontend (`services/googleAuth.js`) makes it worse: it uses the OAuth **access-token** flow (`initTokenClient`), calls Google's userinfo endpoint in the browser, and sends `{email, name, googleId, avatar, credential: <access_token>}`. The `credential` is not an ID token, so the decode fails silently and the backend falls back to the client-supplied `email`. **Any caller can `POST /api/auth/google {"email":"admin@ecogreen.vn"}` and receive a valid session for that account.** The frontend also lets the user store a Google client ID in `localStorage` (`ecogreen_google_client_id`).
+> Written for the V2 workflow. Where a spec says "until B01-P3 use `requireAdmin()`" or marks `TEMPORARY-COMPAT` for a
+> missing permission check: **B01-P3 is complete**, so use `AuthGuard.requirePermission` with a constant from
+> `security/Permissions.java`. A new permission code must be added to `Permissions.java` **and** to a seed migration in the
+> module's own range; `PermissionsCatalogueTest` fails if the two drift. References to "section 1.x" below mean the
+> corresponding rule in `CLAUDE.md`.
 
-**Why it matters.** Full authentication bypass, including for ADMIN accounts. This is the most severe defect in the repository and is independent of every other module.
-
-**Required behaviour.**
-1. The backend accepts **only** a Google **ID token** (`{ "idToken": "<jwt>" }`) and verifies it cryptographically: signature against Google's published keys, `iss` ∈ {`https://accounts.google.com`, `accounts.google.com`}, `aud` == server-configured `GOOGLE_CLIENT_ID`, `exp` not passed, and `email_verified == true`.
-2. Identity data (email, name, `sub`, picture) is taken **only from the verified payload**. Any other client-supplied identity field is ignored/rejected (remove `email/name/googleId/avatar/credential` from the request DTO).
-3. Matching rule: look up the user by `google_sub` first; else by verified email. If a user is matched by email and has no `google_sub`, link it (store `google_sub`). If a user already has a *different* `google_sub`, reject. Auto-created users get a random unusable password and the default customer role (`USER` today).
-4. If `GOOGLE_CLIENT_ID` is not configured the endpoint returns an error (503/500 with a safe message) rather than accepting unverified input. **Fail closed.**
-5. The frontend switches to the Google Identity Services **ID-token** flow (`google.accounts.id.initialize` + `prompt`/`renderButton`, callback receives `response.credential`) and sends only `{ idToken }`. The client ID comes from `VITE_GOOGLE_CLIENT_ID` only; remove the `localStorage` client-ID override and any UI that lets users type a client ID (inspect `components/GoogleOAuthModal.jsx`; if it only exists to capture the client ID, remove its usage from `Login.jsx`/`Register.jsx`, not necessarily the file).
-
-**Inspect (REQUIRED TO CHECK).** `service/AuthService.java`, `controller/AuthController.java`, `dto/GoogleAuthRequest.java`, `dto/AuthResponse.java`, `entity/User.java`, `repository/UserRepository.java`, `security/AuthTokenStore.java`, `frontend/src/services/googleAuth.js`, `services/authApi.js`, `context/AuthContext.jsx`, `pages/Login.jsx`, `pages/Register.jsx`, `components/GoogleOAuthModal.jsx`, `.env.example`, `pom.xml`.
-
-**Database.** Migration `V2__users_google_sub.sql`: `ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub VARCHAR(64); CREATE UNIQUE INDEX IF NOT EXISTS uq_users_google_sub ON users(google_sub) WHERE google_sub IS NOT NULL;` Header block per 1.7. Legacy impact: existing users get `NULL` (no linking until their next Google login); empty-DB and existing-DB both fine; rollback = drop index and column (no data lost except links). Add `private String googleSub` to `User` (column `google_sub`, nullable).
-
-**API.** Keep the **legacy path** `POST /api/auth/google` (TEMP-COMPAT; B01-P2 moves it to `/api/v1/auth/google`). Request `{ "idToken": "…" }`; response unchanged for now (`{token, user}`) so the rest of the frontend keeps working. Invalid/forged/expired token → 401 `{message}` (legacy shape).
-
-**Frontend.** `googleAuth.js`, `Login.jsx`, `Register.jsx` (and `GoogleOAuthModal.jsx` only as needed), `authApi.js#loginWithGoogle(idToken)`. Load the GIS script only on the pages that need it (not globally in `index.html` unless already there). Verify the user-visible flow still logs in.
-
-**Security.** Verifier library: use the smallest reliable option (e.g. `com.google.api-client:google-api-client` `GoogleIdTokenVerifier`, or another maintained JOSE library). Never log the token. Do not accept `alg=none`. Do not trust a client-provided `aud`. Do not auto-link on `email_verified=false`. **Do not auto-create or link an account that holds the ADMIN role through Google unless `email_verified` is true** (state this in the report; owner may choose to forbid Google login for ADMIN entirely — default: allowed only when verified).
-
-**Compatibility/migration.** Old frontend builds that send `{email,…}` are **intentionally broken** (that is the vulnerability). The frontend is migrated in this same task. Existing Google-created users (random password, no `google_sub`) keep working: matched by verified email and linked. Compat code: none permanent.
-
-**Tests (mandatory, JUnit 5 + Mockito, in `backend/src/test/java/com/example/backend/service/`).** Inject/mocked verifier so no network is needed:
-`loginWithGoogle_forgedOrUnverifiableToken_throwsUnauthorized`, `…_wrongAudience_…`, `…_emailNotVerified_…`, `…_requestWithOnlyEmailField_isRejected` (the old exploit), `…_validToken_existingUserByEmail_linksSubAndIssuesSession`, `…_validToken_newUser_createsUserAndCart`, `…_subMismatch_throwsUnauthorized`, `…_clientIdNotConfigured_failsClosed`.
-Frontend: `npm run lint` + `npm run build` if possible; manual: Google login works with a real client ID **or** state it could not be tested without credentials.
-
-**Must NOT change.** Password login, token store, JWT/refresh (that is P2), other controllers, DB schema other than `users.google_sub`.
-
-**ALLOWED**: files in "Inspect" plus the new migration and tests. **FORBIDDEN**: all other controllers/services, order/payment/product code.
-
-**Definition of Done.** (1) The exploit request above returns 401. (2) No identity field is read from the request body. (3) `GOOGLE_CLIENT_ID` and `VITE_GOOGLE_CLIENT_ID` added to `.env.example` (names only). (4) All listed tests pass (or are reported as not run with reason). (5) Frontend builds and still logs in with email/password. (6) Report states the residual risk that the access token is still in-memory/`localStorage` (addressed by P2).
-
-**Report.** Section 1.10 template + the explicit sentence "forged-token exploit: reproduced before / blocked after" (describe how verified).
-
----
-
-### B01-F1 — API foundation (shared, permanent)
-
-**Dependencies**: none. **Blocks**: every module that creates `/api/v1` endpoints.
-
-**Problem.** There is no shared API contract: controllers return bare lists/objects and `Map<String,…>` bodies, errors are `{message}`, `GlobalExceptionHandler` maps *every* `RuntimeException` to 400 with `ex.getMessage()` (leaks internal messages such as `NumberFormatException` text, `NoSuchElement`, constraint violations), there is no validation, no pagination, and `http.js` knows only the legacy shapes.
-
-**Why it matters.** Without one shared foundation each module would invent its own envelope/error/paging format, and unsafe exception messages reach clients.
-
-**Required behaviour.** Implement the contract in Section 1.6, **additively**:
-1. Backend (package `com.example.backend.api`): `ApiResponse<T>` (`data`, `meta`), `PageMeta`, `ApiError`/`ApiErrorBody` (`code`, `message`, `fields`), a `PageResponse` helper to convert Spring `Page<T>` → `{data, meta}`, a safe `sort` whitelist helper, and an `ApiErrorCode` enum.
-2. `GlobalExceptionHandler`: for request paths starting with `/api/v1/` return the new error shape with the mapped `error.code` (Section 1.6); handle `MethodArgumentNotValidException`/`ConstraintViolationException`/`HttpMessageNotReadableException` → `VALIDATION_ERROR` with `fields`; map existing `BadRequestException`→`BUSINESS_RULE_VIOLATION`? **No:** keep the existing exception classes, and add `BusinessRuleViolationException` (400) and `InsufficientStockException`-style exceptions later in their modules; `BadRequestException` on `/api/v1` → `VALIDATION_ERROR`. For **all** paths: the catch-all `RuntimeException`/`Exception` handlers must return 500 `INTERNAL_ERROR` with a generic message and log the real exception server-side. **For legacy paths keep `{message}` and keep today's status codes** except that unknown runtime exceptions must no longer leak their text (message becomes the generic Vietnamese system-error text already used in `handleGeneralException`). Report any legacy behaviour this changes.
-3. Add `spring-boot-starter-validation` to `pom.xml`.
-4. Frontend `services/http.js`: for URLs starting with `/api/v1/`, response interceptor unwraps `{data, meta}` (single → value; list → `{items, meta}`) and error interceptor normalises `{error:{code,message,fields}}` into the existing `friendlyMessage` plus `code` and `fields`; non-`/api/v1/` URLs behave exactly as today. Do not add the refresh/token logic here (P2).
-5. `docs/ai/contracts/B01-api-foundation.md`: documents the helpers and how a module returns a paged list.
-
-**Inspect.** `exception/*`, `controller/*` (read-only, to see current shapes), `frontend/src/services/http.js` and every `services/*Api.js` (to see what unwrapping would break), `pom.xml`.
-
-**Database.** None.
-
-**API.** No endpoint changes. Provide a tiny test-only or documented example. **Do not** convert existing endpoints in this task.
-
-**Frontend.** Only `services/http.js` (dual-mode as above).
-
-**Security.** The 500 handler must never expose exception text/stack/SQL/class names; log with a correlation id (a random id returned in `error.traceId` is allowed). Validation error `fields` must not echo secrets (never echo `password`).
-
-**Compatibility.** No existing endpoint/consumer changes except stopping the message leak (report it). Dual-mode is permanent until the end of B12, then legacy branch can be deleted.
-
-**Efficiency review.** The paged-list helper must not call `count` twice or load the whole table; confirm `Pageable` size is clamped to 100 server-side.
-
-**Tests.** `GlobalExceptionHandler` tests via `MockMvc` standalone: validation failure on `/api/v1/**` → 400 `VALIDATION_ERROR` + `fields`; unknown runtime exception → 500 `INTERNAL_ERROR` without original text on both v1 and legacy paths; legacy `ResourceNotFoundException` → 404 `{message}`; `PageResponse` meta correct; `size=1000` clamped to 100. Frontend: `npm run build`; manual check that existing pages still work (legacy dual-mode).
-
-**Must NOT change.** Business logic, entities, existing endpoint paths/bodies, auth.
-
-**ALLOWED**: new `api/` package, `exception/GlobalExceptionHandler.java` and new exception classes, `pom.xml` (add validation starter), `frontend/src/services/http.js`, tests, the contract doc. **FORBIDDEN**: controllers/services/entities of other modules.
-
-**Definition of Done.** Helpers exist and are documented; legacy frontend still works; no exception text leaks on any path; tests pass or are reported as not run; contract doc published.
-
----
-
-### B01-P2 — JWT access token + refresh token + `/api/v1/auth` (backend + frontend, one task)
-
-**Dependencies**: HARD: B01-F1. SOFT: B01-P1.
-
-**Problem.** Sessions are random UUIDs in a `ConcurrentHashMap` (`AuthTokenStore`): lost on restart, not shareable across instances, never expire, cannot be listed or revoked per user, and there is no refresh. `AuthController.login` re-queries the user after login; `logout` reads the raw header; `register` returns a bare `UserResponse`. The frontend stores `token` and `user` in `localStorage`, has no refresh logic, and `getMe` calls `/users/me`.
-
-**Why it matters.** Restart logs everyone out, tokens live forever, disabling an account cannot revoke refresh capability, and horizontal scaling is impossible.
-
-**Required behaviour.**
-1. **Access token**: signed JWT (HS256 or stronger), TTL ~15 min, claims `sub` (user id), `roles`, `permissions` (empty list until P3), `iat`, `exp`, `jti`. Secret from env `JWT_SECRET` (≥32 bytes). **Fail fast at startup** with a clear message if it is missing/short; no default secret in committed code. Provide a **test-only** secret in `src/test/resources` clearly named as such.
-2. **Refresh token**: opaque random (≥64 bytes, URL-safe), returned once; only its **SHA-256 hash** is stored (`refresh_tokens`); TTL ~14 days; **rotation**: each refresh issues a new refresh token and revokes the old; presenting an already-revoked token revokes the user's whole token family (reuse detection) and returns 401. If you simplify (no rotation) you must justify in the report.
-3. `AuthInterceptor` validates the JWT (signature, expiry), builds `CurrentUser(userId, roles, permissions)`, and still rejects deactivated users using a cheap lookup (existence + `is_active` by id; **do not** load the full `User` with eager roles on every request unless measured necessary; report the trade-off vs. trusting claims for up to 15 min).
-4. Endpoints under **`/api/v1/auth`**: `POST register`, `POST login`, `POST google`, `POST refresh`, `POST logout`, `GET me` (contract below). `login` must not query the user twice; unified error message for bad username/password (no user enumeration; keep the existing Vietnamese texts).
-5. Legacy `/api/auth/*` and `/api/users/me` are **removed in this task** (the frontend is migrated here). `DELETE /api/users/{id}` and `GET /api/users` stay (owned by B08).
-6. `AuthTokenStore` is deleted (or reduced to nothing) once nothing references it.
-7. Frontend: `AuthContext` stores `accessToken`, `refreshToken`, `user`; `http.js` request interceptor sends the access token; response interceptor on 401 `UNAUTHENTICATED` performs **one** refresh (single-flight: concurrent 401s share one refresh promise; use `navigator.locks` if available for multi-tab) then retries the original request once; if refresh fails → clear storage and go to `/login`. `getMe` → `/api/v1/auth/me`. On boot, if a stored token is not JWT-shaped (legacy UUID session) clear it silently and treat the user as logged out.
-8. Brute-force note: there is no rate limiter today. Add a minimal in-memory failed-login throttle (e.g., N attempts per username+IP window → 429 `RATE_LIMITED`) **only if** it can be done in <~80 lines without new infrastructure; otherwise report it as an open risk (do not add Redis).
-
-**Contract (target shapes).**
-```
-POST /api/v1/auth/login        {username,password}
-  → 200 {data:{accessToken, refreshToken, expiresIn, user:{id,username,email,active,roles,permissions}}, meta:null}
-POST /api/v1/auth/register     {username,email,password}  → 201 {data:{id,username,email,active,roles,permissions}}   (preserves today's "register then go to /login" flow; do not auto-login unless Register.jsx's current behaviour is preserved)
-POST /api/v1/auth/google       {idToken} → same as login
-POST /api/v1/auth/refresh      {refreshToken} → 200 {data:{accessToken, refreshToken, expiresIn}}
-POST /api/v1/auth/logout       {refreshToken} → 200 {data:null}   (revokes that refresh token; access token expires naturally)
-GET  /api/v1/auth/me           → 200 {data:{id,username,email,active,roles,permissions}}
-```
-
-**Inspect.** `security/*`, `service/AuthService.java`, `service/PasswordHasher.java`, `controller/AuthController.java`, `controller/UserController.java`, `dto/AuthResponse.java`, `dto/UserResponse.java`, `config/DataLoader.java`, `frontend/src/context/AuthContext.jsx`, `services/http.js`, `services/authApi.js`, `services/userApi.js`, `pages/Login.jsx`, `pages/Register.jsx`, `components/Navbar.jsx`, `components/ProtectedRoute.jsx`, every service file that reads `localStorage.token`.
-
-**Database.** `V3__refresh_tokens.sql`:
-```sql
-CREATE TABLE IF NOT EXISTS refresh_tokens (
-  id BIGSERIAL PRIMARY KEY,
-  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  token_hash VARCHAR(64) NOT NULL UNIQUE,      -- hex SHA-256
-  family_id VARCHAR(36) NOT NULL,
-  expires_at TIMESTAMP NOT NULL,
-  revoked BOOLEAN NOT NULL DEFAULT false,
-  replaced_by_id BIGINT,
-  created_at TIMESTAMP NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id);
-CREATE INDEX IF NOT EXISTS idx_refresh_tokens_family ON refresh_tokens(family_id);
-```
-Legacy impact: new table, no existing rows. Existing sessions (UUID tokens) are invalidated — **all users must log in once** (document). Empty/existing DB both fine. Entity `RefreshToken`.
-
-**Security.** Constant-time comparison where applicable; `jti`/hash never logged; token lifetimes from properties; `Authorization: Bearer` only; CORS unchanged (still `http://localhost:5173`; do not widen). **Residual risk to report:** tokens in `localStorage` are readable by any XSS; an httpOnly-cookie refresh token needs CORS credentials + CSRF handling and is an **open owner decision (D-5)** — do not switch silently.
-
-**Compatibility.** Old UUID tokens: rejected (401) → frontend clears and shows login. Old client calling `/api/auth/*`: gets 404 (removed). No permanent compat code.
-
-**Efficiency review.** Per-request DB hits in the interceptor (before/after count); `User.roles` is `FetchType.EAGER` — measure queries per login and per request; avoid loading roles when claims suffice; ensure refresh lookup uses the unique index.
-
-**Tests.** `login_correctPassword_returnsValidJwtWithClaims`, `login_wrongPassword_throwsUnauthorizedWithoutUserEnumeration`, `jwt_expiredToken_isRejected`, `jwt_tamperedSignature_isRejected`, `jwt_missingSecret_failsFastAtStartup`, `refresh_validToken_rotatesAndRevokesOld`, `refresh_revokedToken_revokesWholeFamilyAndReturns401`, `refresh_expiredToken_returns401`, `logout_revokesRefreshToken`, `interceptor_deactivatedUser_isRejected`, `me_withoutToken_returns401`. Integration (MockMvc) for the six endpoints incl. envelope shape. Frontend: build + manual: login, wait/force expiry, confirm a protected call auto-refreshes once and retries; confirm 2 simultaneous 401s trigger one refresh.
-
-**Must NOT change.** Authorization rules of other controllers (`requireAdmin` semantics); product/order/payment code; roles (P3).
-
-**ALLOWED**: `security/`, `service/AuthService.java`, `controller/AuthController.java`, `controller/UserController.java` (only `me` removal), DTOs for auth, `entity/RefreshToken.java` + repository, migration, `config/` additive properties class, `pom.xml` (JWT library), `application.properties` (additive), `.env.example`, frontend auth files listed under Inspect, tests, contract doc. **FORBIDDEN**: any non-auth controller/service/entity, `init-postgres.sql`.
-
-**Definition of Done.** All auth traffic uses `/api/v1/auth`; legacy auth paths removed; restart no longer logs users out; refresh works end-to-end; `JWT_SECRET` in `.env.example`; tests pass or reported as not run; `docs/ai/contracts/B01-auth.md` published (token claims, endpoint shapes, `CurrentUser`, how other modules authenticate).
-
----
-
-### B01-P3 — Permission-based RBAC
-
-**Dependencies**: HARD: B01-P2.
-
-**Problem.** Authorization is `current.isAdmin()` only. Roles are `USER`/`ADMIN`, hard-coded as constants in `Role.java`, re-seeded by `DataLoader` at every start and by `init-postgres.sql`/`database/seed-data.sql`. There are no permissions, no manager role, and the frontend decides admin UI with `roles.includes('ADMIN')` (and an admin-dashboard role filter uses `USER`).
-
-**Why it matters.** Staff cannot be given partial rights; every new module would repeat `requireAdmin()`.
-
-**Required behaviour.**
-1. Tables `permissions`, `role_permissions`; roles become `CUSTOMER` (renamed from `USER`), `MANAGER`, `ADMIN`.
-2. One catalogue class `security/Permissions.java` holding **all** permission codes (`<resource>:<action>`, lowercase): `product:view|create|update|delete|publish`, `category:view|create|update|delete`, `inventory:view|update|adjust`, `order:view|view_all|update|cancel`, `payment:view|confirm|refund`, `return:view|process`, `user:view|update|disable`, `analytics:view`, `audit:view`, `system:configure`. No permission string literal may appear elsewhere in the codebase.
-3. `ADMIN` gets everything; `MANAGER` gets everything except `system:configure`, `audit:view`, `user:disable` (owner decision D-6: default as stated); `CUSTOMER` gets none (customer rights are ownership-based, not permission-based).
-4. `AuthGuard`: add `requirePermission(request, code)` and `requireAnyPermission(request, codes…)`; keep `requireAdmin()`/`isAdmin()` `@Deprecated` with unchanged behaviour (role `ADMIN`) so unmigrated controllers keep working. **Known consequence to document:** a `MANAGER` is denied by legacy `requireAdmin()` endpoints until the owning module migrates them.
-5. Permissions are loaded efficiently: one query joining user → roles → permissions when issuing a token; never a per-permission query.
-6. Rename-safe code: replace `Role.USER` usage in `AuthService`, `DataLoader` and any other place with `Role.CUSTOMER`; keep `Role.USER` as a `@Deprecated` constant **only if** something external needs it. `DataLoader` must seed the three new roles and must **not** re-create `USER`.
-7. Frontend: `AuthContext` exposes `permissions`, `roles`, `hasPermission(code)`, `hasAnyPermission(...)`, and `isStaff` (ADMIN or MANAGER). `isAdmin` stays for existing callers. Update the admin dashboard role filter option `USER` → `CUSTOMER` (display text may stay Vietnamese) and any other literal `'USER'`. **Do not** redesign the admin UI here (that is B12).
-
-**Inspect.** `entity/Role.java`, `entity/User.java`, `repository/RoleRepository.java`, `security/*`, `config/DataLoader.java`, `service/AuthService.java`, `service/UserService.java`, `dto/UserResponse.java`, `database/init-postgres.sql`, `database/seed-data.sql`, `frontend/src/context/AuthContext.jsx`, `pages/admin/AdminDashboard.jsx` (the `USER` literal), `pages/Login.jsx`/`Register.jsx` (`roles.includes('ADMIN')`).
-
-**Database.** Files (all idempotent, ordered):
-- `V4__permissions.sql` — `permissions(id, code UNIQUE, description)`, `role_permissions(role_id, permission_id, PK both)`.
-- `V5__roles_customer_manager.sql` — **guarded rename**: if role `USER` exists and `CUSTOMER` does not → `UPDATE roles SET name='CUSTOMER'`; if **both** exist (possible if `DataLoader` created one) → move `user_roles` rows from `USER` to `CUSTOMER` (avoiding PK duplicates) then delete `USER`; then `INSERT … ON CONFLICT DO NOTHING` for `MANAGER`. Legacy impact: every existing user keeps their role via the same `roles.id`; no `user_roles` row lost. Rollback: rename back (document the SQL).
-- `V6__seed_permissions.sql` — insert the catalogue and role mappings with `ON CONFLICT DO NOTHING`.
-Update `database/seed-data.sql` **minimally** (role name `USER`→`CUSTOMER`, nothing else; do not change or add credentials; report that it still contains `admin/admin123`).
-Empty DB: roles seeded by `V1` (`USER`,`ADMIN`) then renamed — fine; existing DB: fine.
-
-**API.** No new public endpoints required (the `me` response from P2 now carries real `permissions`). Optionally `GET /api/v1/admin/roles` and `GET /api/v1/admin/permissions` (`system:configure`) — only if cheap.
-
-**Security.** Permission data comes from the DB through the token, never from the client. A removed permission stays effective until the access token expires (≤15 min) — document; role/permission changes are infrequent. Disabled-user check from P2 stays.
-
-**Compatibility.** Old role name `USER` disappears from API responses (`roles:["CUSTOMER"]`). Any client logic keyed on `'USER'` is updated in this task. `requireAdmin()` deprecation is the temporary compat; **removal condition: every controller migrated (end of B12)**.
-
-**Efficiency review.** Count queries for login with 3 roles × N permissions (expect ≤2); avoid `EAGER` → `LAZY` flip unless the query count proves it and tests still pass; index `role_permissions(permission_id)` if joins need it.
-
-**Tests.** `requirePermission_withoutPermission_throwsForbidden`, `requirePermission_withPermission_passes`, `requireAnyPermission_oneOfMany_passes`, `adminRole_hasAllPermissions`, `managerRole_lacksSystemConfigure_auditView_userDisable`, `customerRole_hasNoPermissions`, `roleRename_migrationKeepsUserRoleLinks` (SQL test needs PostgreSQL — if unavailable, provide the SQL and a manual verification query and report "not executed"), `dataLoader_doesNotRecreateUserRole`, `tokenClaims_containPermissionsFromAllRoles_deduplicated`. Frontend: build; manual: login as MANAGER, confirm `permissions` present and `isStaff` true.
-
-**Must NOT change.** Other controllers' guards (they migrate in their own modules), the existing `requireAdmin()` behaviour, order/product logic.
-
-**ALLOWED**: `entity/Role.java`, `entity/Permission.java`, repositories, `security/*`, `config/DataLoader.java`, `service/AuthService.java` (role constants only), `dto/UserResponse.java`, migrations V4–V6, `database/seed-data.sql` (role name only), frontend `AuthContext.jsx` + the one `USER` literal in `AdminDashboard.jsx`, tests, `docs/ai/contracts/B01-rbac.md`. **FORBIDDEN**: controllers other than auth, any module logic.
-
-**Definition of Done.** Permissions catalogue is the only place codes are defined; roles renamed without losing user links; `requirePermission` available and tested; frontend exposes `hasPermission`; `docs/ai/contracts/B01-rbac.md` lists the catalogue, role→permission map, and the exact guard signatures for B02–B10; legacy `requireAdmin` deprecated but working.
-
----
-
-## B02 — Catalog (Product, Category, Images, Search)
+### B02 — Catalog (Product, Category, Images, Search)
 
 **Dependencies.** HARD: B01-F1 (envelope, paging helpers, validation). SOFT: B01-P3 (`requirePermission`; until it exists use `requireAdmin()` and mark `// TEMPORARY-COMPAT(B02): switch to requirePermission when B01-P3 merged`). No dependency on B03/B05.
 
@@ -487,7 +177,7 @@ Empty DB: roles seeded by `V1` (`USER`,`ADMIN`) then renamed — fine; existing 
 
 **Inspect (REQUIRED TO CHECK).** `entity/Product.java`, `entity/Category.java`, `repository/ProductRepository.java` (note the overridden `findAll`/`findById` — check for fetch joins), `repository/CategoryRepository.java`, `service/ProductService.java`, `service/CategoryService.java`, `controller/ProductController.java` (incl. its `/admin/all`), `controller/CategoryController.java`, `dto/ProductResponse.java`, `dto/CategoryResponse.java`, `service/CartService.java` + `OrderService` (read-only: they read `Product.status`/`stockQuantity`), `database/init-postgres.sql`, `database/seed-data.sql`, `frontend/src/services/productApi.js`, `categoryApi.js`, `adminApi.js`, `pages/Home.jsx`, `ProductDetail.jsx`, `components/ProductCard.jsx`, `CategoryFilter.jsx`, `Navbar.jsx` (search box), `pages/admin/AdminDashboard.jsx` (product tab only), `utils/imageResolver.js`, `vite.config.js`.
 
-**Database.** (idempotent; header block per 1.7 on each)
+**Database.** (idempotent; header block per the migration policy in `CLAUDE.md` on each)
 - `V10__products_extend.sql`: add `slug`, `compare_price`, `sku`, `brand` **nullable**; backfill `slug = 'product-' || id` for NULL; **then** `SET NOT NULL` on slug and create unique indexes (`uq_products_slug`, `uq_products_sku` partial `WHERE sku IS NOT NULL`). Replace the status CHECK: drop `chk_products_status` **and any Hibernate-generated `products_status_check`**, then add the 5-value CHECK. Add `CHECK (compare_price IS NULL OR compare_price >= price)` only if existing data satisfies it (verify with a query; otherwise skip and enforce in the service). Indexes (only because the list query filters by them): `idx_products_status_category (status, category_id)`, `idx_products_created_at (created_at DESC)`.
 - `V11__product_images.sql`: `product_images(id, product_id FK ON DELETE CASCADE, image_url VARCHAR(500) NOT NULL, storage_key VARCHAR(255), alt_text VARCHAR(255), sort_order INT NOT NULL DEFAULT 0, created_at)`; index on `product_id`; copy legacy `products.image` (NOT NULL/non-blank) as `sort_order = 0` **guarded by `NOT EXISTS`** so re-running does not duplicate. **Keep `products.image` and keep `Product.image` (`@Deprecated`)**; stop treating it as the source of truth but keep returning it. Legacy values remain bare filenames or URLs and are still resolved by `imageResolver.js` — do not rewrite them. Column drop is a B13 task.
 - `V12__categories_tree.sql`: add `parent_id` (FK to `categories(id)` `ON DELETE RESTRICT` — not `SET NULL`, so subtree deletion is explicit) and `slug` (backfill `'category-' || id`, then NOT NULL + unique); index on `parent_id`.
@@ -533,11 +223,11 @@ Legacy `/api/products`, `/api/categories` (and the product `/admin/all`) are **r
 
 **Definition of Done.** Server-side search/filter/sort/pagination live and used by `Home.jsx`; no browser-side full-dataset filtering remains in storefront or the admin product tab; public list never exposes non-ACTIVE products; migrations V10–V12 idempotent with legacy images preserved; images upload safely; contract doc lists `ProductSearchCriteria`, status enum, DTO shapes and the public service signatures (`ProductService.search(...)`, `getByIdOrSlug(...)`, `publish(...)`); all listed tests pass or are reported as not run.
 
-**Report.** Section 1.10 + the SQL-statement counts before/after for the product list.
+**Report.** the completion report in `CLAUDE.md` + the SQL-statement counts before/after for the product list.
 
 ---
 
-## B05 — Order (state machine, history, safe checkout core)
+### B05 — Order (state machine, history, safe checkout core)
 
 **Dependencies.** HARD: B01-F1. SOFT: B01-P3 (permissions). TEMP-COMPAT: creates the `InventoryGateway` port + a legacy adapter over `products.stock_quantity` (replaced by B03); keeps the legacy `POST /api/orders` checkout path (replaced by B04). **Must be built before B04 and B03.**
 
@@ -584,7 +274,7 @@ CANCELLED, REFUNDED -> (terminal)
 
 **Inspect (REQUIRED TO CHECK).** `entity/Order.java`, `entity/OrderItem.java`, `entity/Payment.java`, `repository/OrderRepository.java` (revenue `@Query`s), `repository/OrderItemRepository.java`, `repository/ProductRepository.java`, `service/OrderService.java`, `service/PaymentService.java`, `service/ReportService.java`, `controller/OrderController.java`, `controller/StatsController.java`, `controller/AdminController.java`, `dto/OrderResponse.java`, `dto/OrderItemResponse.java`, `database/init-postgres.sql` (orders constraint names), frontend `services/orderApi.js`, `reportApi.js`, `adminApi.js`, `pages/Orders.jsx`, `OrderDetail.jsx`, `OrderSuccess.jsx`, `Payment.jsx`, `Checkout.jsx`, `pages/admin/AdminDashboard.jsx` (orders tab), `SalesDashboard.jsx`, `components/AdminStats.jsx`. Also `grep -rn "Order.Status\|\"PENDING\"\|'PENDING'\|CONFIRMED" backend frontend/src`.
 
-**Database.** (idempotent; header block per 1.7)
+**Database.** (idempotent; header block per the migration policy in `CLAUDE.md`)
 - `V20__order_state_machine.sql`, **in this order**: (1) drop the status CHECK — both `chk_orders_status` and any Hibernate-generated `orders_status_check` (look up in `pg_constraint`); (2) map legacy rows: `PENDING → PENDING_PAYMENT`, `CONFIRMED → PROCESSING` (the legacy UI describes CONFIRMED as "preparing goods"), `PAID → PAID` (no guess about delivery — see D-4), `CANCELLED` unchanged; (3) add the 10-value CHECK; (4) set the default `PENDING_PAYMENT`. Legacy impact: row counts unchanged; **legacy `PAID` orders stay `PAID` and will need staff to advance them** (optional commented SQL for the owner: advance legacy PAID orders older than N days to `DELIVERED`; do not run automatically). Rollback: reverse mapping `PENDING_PAYMENT→PENDING`, `PROCESSING→CONFIRMED`, and any new-only status has no legacy equivalent (**data-loss risk if rolled back after new statuses exist**).
 - `V21__order_status_history.sql`: `order_status_history(id, order_id FK CASCADE, old_status, new_status NOT NULL, changed_by FK users ON DELETE SET NULL, note VARCHAR(500), changed_at DEFAULT now())`, index `(order_id, changed_at)`; backfill **one row per existing order** (`old_status NULL`, `new_status` = mapped status, `note 'Migrated from legacy'`, `changed_at = orders.created_at`) guarded by `NOT EXISTS` so re-running does not duplicate.
 - `V22__orders_price_breakdown.sql`: add `subtotal`, `discount_amount`, `shipping_fee`, `discount_code` as **nullable** → backfill → set `NOT NULL DEFAULT 0` where applicable (nullability concern: do not add NOT NULL before backfill). Indexes backed by real queries: `idx_orders_user_created (user_id, created_at DESC)`, `idx_orders_status_created (status, created_at DESC)`.
@@ -620,11 +310,11 @@ Removed in this task: legacy `GET /api/orders`, `GET /api/orders/my`, `GET /api/
 
 **Definition of Done.** One method changes `orders.status`; table enforced and exhaustively tested; history written for every change and backfilled for old orders; cancel restores stock correctly in both branches; legacy checkout atomic with the conditional stock update; revenue dashboards unchanged in meaning; no N+1 on order lists; frontend uses `orderStatus.js` and server-driven options; contract doc lists the enum, table, side effects, `createPendingOrder`/`transitionStatus` signatures, `InventoryGateway`, events, and the TEMP-COMPAT removal conditions.
 
-**Report.** Section 1.10 + (a) the legacy status counts before/after migration (or "not executed"), (b) the list of every code location that used to write `orders.status`, (c) query counts before/after for list endpoints.
+**Report.** the completion report in `CLAUDE.md` + (a) the legacy status counts before/after migration (or "not executed"), (b) the list of every code location that used to write `orders.status`, (c) query counts before/after for list endpoints.
 
 ---
 
-## B03 — Inventory (reservation model, ledger, concurrency safety)
+### B03 — Inventory (reservation model, ledger, concurrency safety)
 
 **Dependencies.** HARD: B05 (defines `InventoryGateway`, the legacy adapter and the order side effects). SOFT: B02 (`OUT_OF_STOCK` status is admin-set only; B03 does not auto-manage it). Replaces B05's TEMP-COMPAT adapter.
 
@@ -644,7 +334,7 @@ Removed in this task: legacy `GET /api/orders`, `GET /api/orders/my`, `GET /api/
 
 **Inspect (REQUIRED TO CHECK).** B05's `service/inventory/*`, `service/OrderService.java`, `service/CartService.java`, `service/ProductService.java`, `entity/Product.java`, `repository/ProductRepository.java`, `dto/ProductResponse.java`, `dto/CartItemResponse.java`, `controller/CartController.java`, `controller/ProductController.java` (or its B02 successor), `database/seed-data.sql` (inserts `stock_quantity`), frontend `pages/Cart.jsx`, `components/ProductCard.jsx`, `pages/ProductDetail.jsx`, `pages/admin/AdminDashboard.jsx` (stock form/low-stock), `context/CartContext.jsx`.
 
-**Database.** (idempotent, header block per 1.7)
+**Database.** (idempotent, header block per the migration policy in `CLAUDE.md`)
 - `V30__inventory.sql`: `inventory(product_id PK FK→products ON DELETE CASCADE, quantity_on_hand INT NOT NULL DEFAULT 0, reserved_quantity INT NOT NULL DEFAULT 0, updated_at, CHECKs above)`. **Legacy conversion (the critical part)** — insert one row per existing product, guarded `ON CONFLICT DO NOTHING`:
   `reserved_quantity` = Σ quantity of `order_items` belonging to orders in `PENDING_PAYMENT`;
   `quantity_on_hand` = `products.stock_quantity` **+** that same sum.
@@ -671,11 +361,11 @@ Legacy impact: `products.stock_quantity` kept untouched (becomes a frozen histor
 
 **Definition of Done.** One implementation of `InventoryGateway`; zero readers/writers of `products.stock_quantity`; concurrency and deadlock tests pass (or are reported as not run with reason); every stock change has a ledger row; migration conversion verified; contract doc lists the operations, invariants, idempotency rule and the lock-ordering rule that B04/B07 must respect.
 
-**Report.** Section 1.10 + the grep proof, the legacy-cancelled-orders diagnostic output (or "not executed"), and before/after query counts for product list and cart.
+**Report.** the completion report in `CLAUDE.md` + the grep proof, the legacy-cancelled-orders diagnostic output (or "not executed"), and before/after query counts for product list and cart.
 
 ---
 
-## B08 — Customer Management (addresses, enable/disable, admin user tools)
+### B08 — Customer Management (addresses, enable/disable, admin user tools)
 
 **Dependencies.** HARD: B01-P2 (refresh-token revocation, deactivated-user rejection). SOFT: B01-P3 (permissions), B05 (order history). B04 soft-depends on this module (address picker).
 
@@ -729,7 +419,7 @@ Legacy `GET /api/users`, `DELETE /api/users/{id}` removed after the admin Users 
 
 ---
 
-## B04 — Cart & Checkout (discounts, shipping, address, safe order placement)
+### B04 — Cart & Checkout (discounts, shipping, address, safe order placement)
 
 **Dependencies.** HARD: **B05** (`createPendingOrder`, `PENDING_PAYMENT`, `InventoryGateway`), B01-F1. SOFT: B03 (real inventory — before B03, B05's adapter is used through the same port), B08 (`addressId`; if absent, free-text only), B02. Removes B05's legacy `POST /api/orders` and B05-era `OrderService.checkout`.
 
@@ -767,3 +457,401 @@ Legacy `GET /api/users`, `DELETE /api/users/{id}` removed after the admin Users 
 **ALLOWED**: `service/CheckoutService.java`, `controller/Checkout*.java`, `controller/CartController.java`, `service/CartService.java`, cart DTOs/repositories, `entity/Discount.java` + repository/service/admin controller, `service/PaymentService.java` (only `createPendingPayment`), `controller/OrderController.java` (remove legacy checkout), `OrderService` (remove legacy checkout only), `event/OrderPlacedEvent.java`, migration V40, `application.properties` (shipping props), `.env.example`, frontend files in Inspect, tests, `docs/ai/contracts/B04-checkout.md`. **FORBIDDEN**: `transitionStatus` logic, `InventoryService` internals, payment gateway, returns.
 
 **Definition of Done.** Checkout is atomic and idempotent per cart; totals/discount/shipping computed only on the server and shown from `/checkout/preview`; legacy checkout and cart paths removed with frontend migrated; discounts manageable via admin API; contract doc lists `CheckoutRequest`/`CheckoutPreview`/`OrderResponse` shapes and the config properties.
+
+## 6. Module drafts that have no V2 specification (B06, B07, B09–B13)
+
+> **These were written in the first (V1) round, in Vietnamese, before the code was audited. Treat them as drafts of the
+> required behaviour, not as ready-to-run prompts.** Before using one, apply these overrides (they come from the current code
+> and from `CLAUDE.md`, and win over the text below):
+>
+> 1. **Paths.** `modules/**`, `apps/web/**` and `modules/*/CONTRACT.md` do not exist. Use the real layout
+>    (`backend/src/main/java/com/example/backend/<layer>/`, `frontend/src/`) and publish the contract at
+>    `docs/ai/contracts/<module>.md`.
+> 2. **Migrations.** Flyway is not active: files are idempotent, carry the mandatory header, stay inside the module's range
+>    (section 3) and are applied by hand in dependency order. Any step that activates Flyway or switches `ddl-auto` to
+>    `validate` belongs to B13 and happens only when that task is assigned.
+> 3. **Money** is `DECIMAL(12,2)` / `BigDecimal`. The "BIGINT smallest unit" convention was withdrawn.
+> 4. **API.** `/api/v1`, `{data, meta}` envelope, closed error-code set, 0-based pagination — see `CLAUDE.md`.
+> 5. **Authorization.** Use `requirePermission` with `Permissions.java` constants; no permission string literals.
+> 6. **Order status and stock** follow the B05/B03 specifications above (state machine, `InventoryGateway`, release vs restock);
+>    do not reintroduce the V1 behaviour listed in section 2.1.
+> 7. **Events.** Each event class is owned by the publishing module (`com.example.backend.event`); B09/B10 only consume.
+> 8. **Frontend.** B11/B12 are slices: each is done together with the backend module whose UI it changes, not at the end.
+> 9. **B13 infra.** The Dockerfile snippets use `npm ci`, which currently fails because `frontend/package-lock.json` is out of
+>    sync with `package.json` (missing `@emnapi/*`); repair the lockfile first. Redis/RabbitMQ only if a measured need exists.
+
+### B06 — Payment (Cổng thanh toán thật)
+
+**Bối cảnh**: `PaymentService` hiện tại mô phỏng 100% (`payNow()` luôn trả `SUCCESS` ngay lập tức). Bạn tích hợp cổng thật. **Khuyến nghị dùng VNPay sandbox** (phổ biến ở VN, tài liệu tiếng Việt đầy đủ, miễn phí test) — nếu bạn chọn cổng khác (MoMo/Stripe), giữ nguyên interface bên dưới, chỉ đổi phần implementation gọi API.
+
+**Phụ thuộc**: B05 (`OrderService.transitionStatus()`).
+
+#### Migration `V50__payment_gateway_fields.sql`
+```sql
+ALTER TABLE payments
+    ADD COLUMN provider VARCHAR(30),
+    ADD COLUMN raw_response TEXT;
+ALTER TABLE payments DROP CONSTRAINT IF EXISTS chk_payments_status;
+ALTER TABLE payments ADD CONSTRAINT chk_payments_status
+    CHECK (status IN ('PENDING','SUCCESS','FAILED','CANCELLED','REFUNDED'));
+```
+
+#### Chữ ký hàm
+```java
+public interface PaymentGatewayClient {
+    PaymentInitiationResult initiate(Order order, String returnUrl);  // trả về URL redirect sang cổng
+    WebhookVerificationResult verifyAndParse(Map<String,String> rawParams); // verify chữ ký HMAC
+}
+
+// PaymentService
+PaymentInitiationResult initiatePayment(Long orderId);
+void handleWebhook(Map<String,String> rawParams);  // idempotent: nếu transaction_id đã xử lý rồi thì bỏ qua, không xử lý 2 lần
+Payment getByOrderId(Long orderId);
+```
+
+**`handleWebhook()` BẮT BUỘC làm đúng thứ tự** (đây là endpoint public, không qua `AuthGuard`, nên phải tự bảo vệ bằng chữ ký):
+1. `gatewayClient.verifyAndParse(rawParams)` — nếu chữ ký sai, trả `400` ngay, **không** đụng gì vào DB.
+2. Tìm `Payment` theo `transactionId`; nếu đã có `status != PENDING` → trả `200 OK` luôn (idempotent — cổng thanh toán hay gọi lại webhook nhiều lần).
+3. Nếu thành công: `payment.status = SUCCESS`, `paidAt = now()`, gọi `orderService.transitionStatus(orderId, PAID, null, "Auto by payment webhook")`.
+4. Nếu thất bại: `payment.status = FAILED`, gọi `orderService.transitionStatus(orderId, CANCELLED, null, "Payment failed")` (giải phóng tồn kho qua hiệu ứng phụ đã có ở B05).
+
+#### API
+| Method | Path | Body | Permission |
+|---|---|---|---|
+| POST | `/api/v1/payments/{orderId}/initiate` | `{returnUrl}` | chủ đơn |
+| GET/POST | `/api/v1/payments/webhook/{provider}` | tham số tuỳ cổng (VNPay dùng query param GET) | **Public, tự verify chữ ký, KHÔNG qua AuthGuard** |
+| GET | `/api/v1/payments/{orderId}` | — | chủ đơn HOẶC `payment:view` |
+
+#### Test bắt buộc
+- `handleWebhook_invalidSignature_rejectsWithoutDbChange()`
+- `handleWebhook_duplicateTransactionId_isIdempotent()` — gọi webhook 2 lần cùng `transactionId`, assert `transitionStatus` chỉ được gọi 1 lần.
+- `handleWebhook_success_transitionsOrderToPaid()`
+
+#### Definition of Done
+- [ ] Secret/API key cổng thanh toán đọc từ biến môi trường (`PAYMENT_VNPAY_SECRET`...), có trong `.env.example`
+- [ ] `modules/payment/CONTRACT.md` công bố `PaymentStatus` enum cho B07 (refund) dùng
+
+---
+
+### B07 — Return & Refund
+
+**Bối cảnh**: `ReturnRequest` hiện có (`reason/description/imageUrl/status/adminNote`) khá gần yêu cầu nhưng chỉ hỗ trợ 1 ảnh, không có `return_items` (trả từng sản phẩm riêng), duyệt xong không tự hoàn tiền/hoàn kho. Bạn hoàn thiện domain này.
+
+**Phụ thuộc**: B03 (`InventoryService.restock()`), B05 (`OrderService.transitionStatus()`, chỉ cho phép tạo return khi order đang `DELIVERED`), B06 (gọi refund qua gateway nếu có, hoặc đánh dấu hoàn tiền thủ công).
+
+#### Migration `V60__returns_full.sql`
+```sql
+ALTER TABLE return_requests RENAME TO returns;
+ALTER TABLE returns ADD COLUMN status_new VARCHAR(20);
+UPDATE returns SET status_new = status;  -- giữ nguyên PENDING/APPROVED/REJECTED
+ALTER TABLE returns DROP COLUMN status;
+ALTER TABLE returns RENAME COLUMN status_new TO status;
+ALTER TABLE returns ADD CONSTRAINT chk_returns_status
+    CHECK (status IN ('PENDING','INFO_REQUESTED','APPROVED','REJECTED','RETURNED','REFUNDED'));
+
+CREATE TABLE return_items (
+    id BIGSERIAL PRIMARY KEY,
+    return_id BIGINT NOT NULL REFERENCES returns(id) ON DELETE CASCADE,
+    order_item_id BIGINT NOT NULL REFERENCES order_items(id),
+    quantity INT NOT NULL CHECK (quantity > 0)
+);
+CREATE TABLE return_images (
+    id BIGSERIAL PRIMARY KEY,
+    return_id BIGINT NOT NULL REFERENCES returns(id) ON DELETE CASCADE,
+    image_url VARCHAR(500) NOT NULL,
+    sort_order INT NOT NULL DEFAULT 0
+);
+-- Di chuyển ảnh đơn lẻ cũ sang bảng mới
+INSERT INTO return_images (return_id, image_url, sort_order)
+    SELECT id, image_url, 0 FROM returns WHERE image_url IS NOT NULL;
+
+CREATE TABLE refunds (
+    id BIGSERIAL PRIMARY KEY,
+    order_id BIGINT NOT NULL REFERENCES orders(id),
+    return_id BIGINT REFERENCES returns(id),
+    amount DECIMAL(12,2) NOT NULL,
+    status VARCHAR(20) NOT NULL CHECK (status IN ('PENDING','SUCCESS','FAILED')),
+    provider_transaction_id VARCHAR(100),
+    refunded_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+```
+
+#### Chữ ký hàm
+```java
+ReturnRequestDto create(Long userId, Long orderId, String reason, String description,
+                         List<MultipartFile> images, List<ReturnItemDraft> items);
+                         // throws BusinessRuleViolationException nếu order.status != DELIVERED
+
+ReturnRequestDto updateStatus(Long returnId, ReturnStatus newStatus, String adminNote, Long changedByUserId);
+```
+
+**Hiệu ứng phụ bắt buộc trong `updateStatus()`**:
+- `-> APPROVED`: không làm gì thêm ngoài đổi status (chờ xử lý vật lý nhận hàng trả về).
+- `-> RETURNED` (hàng đã thật sự về kho): với mỗi `return_item`, gọi `inventoryService.restock(productId, quantity, "RETURN", returnId)`; gọi `orderService.transitionStatus(orderId, RETURNED, ...)`.
+- `-> REFUNDED`: tạo `Refund` record (`status=PENDING`), gọi `paymentGatewayClient` hoàn tiền nếu cổng hỗ trợ hoàn tự động, nếu không hỗ trợ thì để `status=PENDING` và admin tự xử lý thủ công ngoài hệ thống rồi gọi 1 endpoint riêng xác nhận; gọi `orderService.transitionStatus(orderId, REFUNDED, ...)`.
+
+#### API
+| Method | Path | Body | Permission |
+|---|---|---|---|
+| POST | `/api/v1/returns` | multipart: `{orderId, reason, description, items[], images[]}` | requireUser |
+| GET | `/api/v1/returns/my` | — | requireUser |
+| GET | `/api/v1/admin/returns?status=&page=&size=` | — | `return:view` |
+| PATCH | `/api/v1/admin/returns/{id}/status` | `{newStatus, adminNote}` | `return:process` |
+
+#### Test bắt buộc
+- `create_whenOrderNotDelivered_throwsBusinessRuleViolation()`
+- `updateStatus_toReturned_restocksInventoryForEachItem()`
+- `updateStatus_toRefunded_createsRefundRecord()`
+
+#### Definition of Done
+- [ ] `modules/return/CONTRACT.md` công bố shape `ReturnRequestDto`
+
+---
+
+### B09 — Analytics Events & Dashboard mở rộng
+
+**Bối cảnh**: Không có bảng `analytics_events`. `ReportService`/`StatsController` hiện chỉ có doanh thu/top-sản-phẩm cơ bản.
+
+**Nguyên tắc quan trọng**: block này **chỉ đọc**, không bao giờ ghi ngược vào bảng của B02/B05/B06/B07. Để nhận biết sự kiện xảy ra ở các module khác mà không tạo phụ thuộc ngược, dùng `ApplicationEventPublisher` của Spring — các block khác publish event (xem danh sách ở dưới), bạn chỉ lắng nghe.
+
+#### Migration `V80__analytics_events.sql`
+```sql
+CREATE TABLE analytics_events (
+    id BIGSERIAL PRIMARY KEY,
+    event_type VARCHAR(50) NOT NULL,
+    user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    session_id VARCHAR(100),
+    payload JSONB,
+    created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_analytics_events_type_created ON analytics_events(event_type, created_at);
+```
+
+#### Chữ ký hàm
+```java
+// AnalyticsEventService — KHÔNG BAO GIỜ ném exception ra ngoài (wrap try/catch, chỉ log lỗi)
+// để lỗi ghi analytics không bao giờ làm fail luồng nghiệp vụ chính gọi nó.
+void track(String eventType, Long userId, String sessionId, Map<String, Object> payload);
+
+@EventListener
+void onOrderCreated(OrderCreatedEvent event);     // event_type = "order_created"
+@EventListener
+void onPaymentSuccess(PaymentSuccessEvent event); // event_type = "payment_success"
+@EventListener
+void onOrderCancelled(OrderCancelledEvent event);
+@EventListener
+void onReturnCreated(ReturnCreatedEvent event);
+```
+
+**Danh sách event class cần có** (đặt ở package dùng chung `com.example.backend.event`, đây là "hợp đồng chia sẻ" — B05/B06/B07/B02/B04 publish, bạn và B10 cùng lắng nghe, không block nào khác được sửa các class event này nếu không có sự đồng thuận):
+```
+ProductViewedEvent(productId, userId)
+AddToCartEvent(productId, userId, quantity)
+CheckoutStartedEvent(userId, cartId)
+OrderCreatedEvent(orderId, userId, total)
+PaymentSuccessEvent(orderId, amount)
+OrderCancelledEvent(orderId, reason)
+ReturnCreatedEvent(returnId, orderId)
+```
+Các block B02 (view sản phẩm), B04 (add to cart, checkout started), B05 (order created/cancelled), B06 (payment success), B07 (return created) chịu trách nhiệm **tự publish** đúng event tương ứng tại đúng điểm nghiệp vụ của mình bằng `applicationEventPublisher.publishEvent(new XxxEvent(...))` — không phải việc của block B09.
+
+#### API mở rộng `ReportService`/`StatsController`
+```java
+Page<InventoryView> getLowStockProducts(int threshold, Pageable pageable);  // gọi InventoryService
+long getPendingOrdersCount();
+BigDecimal getTotalRefundAmount(LocalDate from, LocalDate to);
+List<CustomerFrequency> getCustomerPurchaseFrequency(Pageable pageable);
+```
+| Method | Path | Permission |
+|---|---|---|
+| GET | `/api/v1/admin/analytics/events?type=&from=&to=&page=&size=` | `analytics:view` |
+| GET | `/api/v1/admin/reports/low-stock` | `analytics:view` |
+| GET | `/api/v1/admin/reports/pending-orders-count` | `analytics:view` |
+| GET | `/api/v1/admin/reports/refund-summary?from=&to=` | `analytics:view` |
+| GET | `/api/v1/admin/reports/customer-frequency` | `analytics:view` |
+
+#### Test bắt buộc
+- `track_whenDbFails_doesNotThrow()` — mock repository ném exception, assert `track()` vẫn return bình thường, chỉ log lỗi.
+
+#### Definition of Done
+- [ ] `modules/analytics/CONTRACT.md` công bố toàn bộ 7 event class ở package `event` cho các block khác publish đúng chữ ký
+
+---
+
+### B10 — Notification
+
+**Bối cảnh**: Không có bất kỳ cơ chế gửi email/SMS nào. Bạn xây tầng này, lắng nghe cùng bộ event như B09 (không phụ thuộc B09, chỉ dùng chung package `event`).
+
+**Lưu ý kiến trúc**: bản đầu dùng `@Async` + `ApplicationEventPublisher` trong-process (đơn giản, đủ cho academic/production nhỏ). Khi B13 dựng xong RabbitMQ (Phase 6 theo roadmap), có thể nâng cấp thành consumer thật mà không đổi chữ ký `NotificationService.send()` — ghi rõ điều này trong `CONTRACT.md` của bạn.
+
+#### Migration `V90__notifications.sql`
+```sql
+CREATE TABLE notifications (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    type VARCHAR(50) NOT NULL,         -- 'ORDER_CREATED','PAYMENT_SUCCESS','RETURN_APPROVED'...
+    channel VARCHAR(20) NOT NULL CHECK (channel IN ('EMAIL','SMS','PUSH')),
+    title VARCHAR(255) NOT NULL,
+    body TEXT NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','SENT','FAILED')),
+    sent_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+```
+
+#### Chữ ký hàm
+```java
+@Async
+void send(Long userId, NotificationType type, Map<String, Object> templateContext);
+
+@EventListener
+void onOrderCreated(OrderCreatedEvent event);       // gửi email "Đặt hàng thành công"
+@EventListener
+void onPaymentSuccess(PaymentSuccessEvent event);   // gửi email "Thanh toán thành công"
+@EventListener
+void onReturnStatusChanged(ReturnStatusChangedEvent event); // cần B07 publish thêm event này
+```
+
+Cấu hình bắt buộc: bật `@EnableAsync` ở main application class (nếu chưa bật — kiểm tra trước, không bật trùng 2 nơi); dùng `JavaMailSender` (Spring Boot starter mail) với SMTP config đọc từ `SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD` (biến môi trường, thêm vào `.env.example`). Nếu SMTP chưa cấu hình (môi trường dev/test), `send()` phải log ra console thay vì ném exception (không được làm fail toàn bộ đơn hàng chỉ vì gửi mail lỗi — đây là yêu cầu SRS "không chặn request quan trọng").
+
+#### API
+| Method | Path | Permission |
+|---|---|---|
+| GET | `/api/v1/users/me/notifications?page=&size=` | requireUser |
+| GET | `/api/v1/admin/notifications?status=&page=&size=` | `analytics:view` (xem log gửi, phục vụ debug) |
+
+#### Test bắt buộc
+- `send_whenSmtpFails_doesNotThrowAndMarksFailed()`
+- `onOrderCreated_createsNotificationRowWithCorrectTemplate()`
+
+#### Definition of Done
+- [ ] `modules/notification/CONTRACT.md` ghi rõ danh sách `NotificationType` hỗ trợ và template tương ứng
+
+---
+
+### B11 — Frontend Storefront (React/Vite)
+
+**Bối cảnh**: Frontend hiện tại (`frontend/src/`) đã có cấu trúc đúng (`context/`, `services/`, `pages/`, `components/`) — giữ nguyên, mở rộng thêm. Thay đổi lớn nhất: chuyển từ token đơn giản sang access+refresh token (B01), và API giờ trả envelope `{data, meta}`/`{error}` thay vì trả thẳng object.
+
+#### Việc cần làm
+1. **`services/http.js`**: sửa interceptor response để tự unwrap `response.data.data` (envelope mới); interceptor lỗi đọc `error.response.data.error.code` để hiện đúng message; thêm interceptor: khi nhận lỗi `401` với `error.code === 'UNAUTHENTICATED'`, tự gọi `POST /api/v1/auth/refresh` bằng refresh token lưu sẵn, nếu thành công thì gắn access token mới và **retry lại đúng 1 lần** request gốc; nếu refresh cũng fail thì mới điều hướng `/login`.
+2. **`context/AuthContext.jsx`**: lưu thêm `permissions: string[]` (từ `/api/v1/auth/me`), expose hook `hasPermission(code)`.
+3. **Trang catalog (`Home.jsx`)**: đổi từ lọc client-side sang gọi API `GET /api/v1/products?keyword=&categoryId=&minPrice=&maxPrice=&page=&size=` thật — xoá toàn bộ logic filter bằng JS trên mảng đã tải hết.
+4. **`ProductDetail.jsx`**: hiển thị gallery nhiều ảnh (`product.images[]` thay vì 1 ảnh), hiển thị `comparePrice` (giá gạch ngang) nếu có.
+5. **Trang mới `Addresses.jsx`**: CRUD địa chỉ giao hàng (gọi API B08), chọn địa chỉ mặc định lúc checkout thay vì nhập tay.
+6. **`Checkout.jsx`**: thêm ô nhập `discountCode`, hiển thị rõ 3 dòng `Tạm tính / Giảm giá / Phí ship / Tổng cộng` (không gộp chung 1 số như hiện tại).
+7. **`OrderDetail.jsx`**: hiển thị timeline trạng thái đơn (gọi `GET /api/v1/orders/:id/history`), nút "Huỷ đơn" chỉ hiện khi `status` nằm trong tập cho phép huỷ (lấy đúng theo bảng transition ở B05, không tự đoán).
+8. **Form tạo return request**: cho chọn nhiều ảnh (input `multiple`), chọn từng sản phẩm trong đơn muốn trả (không phải trả cả đơn như hiện tại).
+
+#### Định dạng response mới cần biết khi viết code gọi API
+```js
+// Thành công — luôn unwrap .data trong http.js, code trong page component nhận thẳng giá trị thật
+// Lỗi — http.js ném Error với .code và .message lấy từ error.code/error.message
+try {
+  await orderApi.cancel(orderId, note);
+} catch (err) {
+  if (err.code === 'BUSINESS_RULE_VIOLATION') { /* hiện message cụ thể */ }
+}
+```
+
+#### Definition of Done
+- [ ] Không còn bất kỳ logic lọc sản phẩm bằng JS thuần trên mảng đầy đủ
+- [ ] Refresh token tự động hoạt động, test thủ công: đợi access token hết hạn (đặt `JWT_SECRET` TTL ngắn lúc test), gọi 1 API, xác nhận tự refresh mà không bị văng ra `/login`
+
+---
+
+### B12 — Frontend Admin (CMS)
+
+**Phụ thuộc**: toàn bộ API block B01–B10 cần có `CONTRACT.md` ổn định trước khi hoàn thiện UI tương ứng (có thể bắt đầu UI sớm bằng mock response theo đúng shape trong `CONTRACT.md`).
+
+#### Việc cần làm
+1. **Permission-based rendering**: tạo hook `usePermission(code)` đọc từ `AuthContext.permissions`; mọi nút hành động nhạy cảm (xoá sản phẩm, duyệt return, đổi trạng thái đơn) **phải** bọc điều kiện `hasPermission('product:delete')` — không hiện nút nếu thiếu quyền, dù vẫn phải hiểu đây chỉ là UX, backend đã tự chặn.
+2. **Trang quản lý sản phẩm**: form tạo/sửa có đủ field mới (`slug` tự sinh từ `name` nhưng cho sửa tay, `sku`, `brand`, `comparePrice`), upload nhiều ảnh kéo-thả sắp xếp `sortOrder`, nút "Publish" riêng (gọi API publish, hiện lỗi rõ ràng nếu thiếu field bắt buộc).
+3. **Trang quản lý category**: hiển thị dạng cây (thu gọn/mở rộng theo `parent_id`), kéo-thả đổi cha (tối thiểu: dropdown chọn category cha khi tạo/sửa).
+4. **Trang Inventory mới**: danh sách tồn kho, lọc "sắp hết hàng", nút điều chỉnh thủ công (`ADJUST`) yêu cầu nhập `reason` bắt buộc, xem lịch sử transaction của 1 sản phẩm.
+5. **Trang Orders**: hiển thị đúng 10 trạng thái mới, nút đổi trạng thái chỉ hiện các lựa chọn **hợp lệ theo bảng transition** (gọi API hoặc hard-code đúng bảng ở B05 phía frontend để disable nút sai, backend vẫn là chốt chặn cuối).
+6. **Trang Returns/Refunds**: duyệt/từ chối, xem ảnh (gallery nhiều ảnh), xem trạng thái refund liên kết.
+7. **Trang Analytics mở rộng**: thêm card "Low stock", "Pending orders", "Refund amount tháng này", "Tần suất mua hàng theo khách" (dùng API B09).
+8. **Trang Customer Management**: nút Enable/Disable tài khoản, xem lịch sử đơn của khách ngay trong trang chi tiết khách hàng.
+
+#### Definition of Done
+- [ ] Không có bất kỳ nút hành động nào hiện ra cho user thiếu permission tương ứng (kiểm tra bằng cách đăng nhập tài khoản MANAGER thiếu 1 permission cụ thể, xác nhận đúng nút biến mất)
+
+---
+
+### B13 — Infra, CI/CD, Observability, Testing Framework
+
+**Đây là block duy nhất chạy độc lập hoàn toàn ngay từ ngày đầu, không chờ block nào.**
+
+#### Việc cần làm
+
+1. **Flyway**: thêm dependency `org.flywaydb:flyway-core` + `flyway-database-postgresql`, chuyển `database/init-postgres.sql` hiện có thành `backend/src/main/resources/db/migration/V1__baseline.sql` (copy nguyên văn, không sửa nội dung), xoá cơ chế Hibernate `ddl-auto` nếu đang bật (đổi `spring.jpa.hibernate.ddl-auto=validate` để Hibernate không tự ý đổi schema nữa — Flyway là nguồn chân lý duy nhất).
+
+2. **Dockerfile backend** (`backend/Dockerfile`, multi-stage):
+```dockerfile
+FROM maven:3.9-eclipse-temurin-21 AS build
+WORKDIR /app
+COPY pom.xml .
+RUN mvn dependency:go-offline
+COPY src ./src
+RUN mvn package -DskipTests
+
+FROM eclipse-temurin:21-jre-alpine
+WORKDIR /app
+COPY --from=build /app/target/*.jar app.jar
+EXPOSE 8081
+ENTRYPOINT ["java","-jar","app.jar"]
+```
+
+3. **Dockerfile frontend** (`frontend/Dockerfile`, build tĩnh + Nginx):
+```dockerfile
+FROM node:20-alpine AS build
+WORKDIR /app
+COPY package*.json .
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM nginx:alpine
+COPY --from=build /app/dist /usr/share/nginx/html
+EXPOSE 80
+```
+
+4. **`docker-compose.yml` đầy đủ** (mở rộng file hiện có, không viết đè — chỉ thêm service): `postgres` (giữ nguyên), thêm `redis:7-alpine` (port 6379), thêm `rabbitmq:3-management-alpine` (port 5672 + UI 15672), thêm service `backend` (build từ Dockerfile, depends_on postgres/redis/rabbitmq, đọc `.env`), thêm service `frontend` (build từ Dockerfile, depends_on backend).
+
+5. **GitHub Actions** (`.github/workflows/ci.yml`):
+```yaml
+name: CI
+on: [push, pull_request]
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { java-version: '21', distribution: 'temurin' }
+      - run: cd backend && mvn -B test
+      - run: cd backend && mvn -B package -DskipTests
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: cd frontend && npm ci
+      - run: cd frontend && npm run build
+```
+(Thêm bước build/push Docker image sau khi 2 job trên xanh, dùng `docker/build-push-action`, đẩy lên GitHub Container Registry — chỉ bật ở nhánh `main`.)
+
+6. **Jacoco** (code coverage): thêm plugin `jacoco-maven-plugin` vào `pom.xml`, cấu hình fail build nếu coverage < 60% cho package `service/` (không áp cho `controller/`/`dto/` — ít logic, không đáng bắt buộc coverage cao). Mỗi block B01–B10 tự viết test của mình để đạt ngưỡng này, B13 chỉ dựng công cụ đo.
+
+7. **Observability**: thêm `spring-boot-starter-actuator`, bật `/actuator/health`, `/actuator/info`; cấu hình Logback ghi log dạng JSON (dùng `logstash-logback-encoder`) để dễ đưa vào ELK sau này; thêm `logging.level.com.example.backend=INFO` mặc định, `DEBUG` qua biến môi trường `LOG_LEVEL`.
+
+8. **`.env.example`** tổng hợp — gom tất cả biến môi trường mà các block B01–B10 đã khai báo rải rác, giữ file này làm nguồn tổng hợp duy nhất (B13 có trách nhiệm theo dõi và cập nhật file này mỗi khi có block mới thêm biến).
+
+#### Definition of Done
+- [ ] `docker compose up` từ thư mục gốc chạy được toàn bộ stack (postgres+redis+rabbitmq+backend+frontend) không lỗi
+- [ ] `mvn test` chạy được toàn bộ test của mọi block đã merge, báo cáo coverage xuất ra `target/site/jacoco/index.html`
+- [ ] CI pipeline xanh trên GitHub Actions cho 1 PR thử nghiệm
+- [ ] `/actuator/health` trả `200 {"status":"UP"}`

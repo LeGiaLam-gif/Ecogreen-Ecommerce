@@ -13,7 +13,7 @@ All authentication traffic is under `/api/v1/auth`. The legacy `/api/auth/*` and
 Tests use `src/test/resources/test-jwt.properties` (TEST-ONLY secret).
 
 ## 2. Access token (JWT, HS256)
-Claims: `sub` = user id (string), `roles` = `["ADMIN","USER"]`, `permissions` = `[]` (filled by B01-P3), `iat`, `exp`, `jti`.
+Claims: `sub` = user id (string), `roles` = `["ADMIN","CUSTOMER"]`, `permissions` = the union of the permissions of all the user's roles, read from the database (B01-P3; see `B01-rbac.md`), `iat`, `exp`, `jti`.
 Sent as `Authorization: Bearer <accessToken>` only.
 
 ## 3. Refresh token

@@ -1,7 +1,7 @@
 # Contract: B01-P3 — Permission-based RBAC
 
-Owner: B01-P3. Depends on: B01-P2 (JWT access token, `CurrentUser`, `AuthInterceptor`). Does not edit
-`docs/ai/contracts/B01-auth.md` (see section 11).
+Owner: B01-P3. Depends on: B01-P2 (JWT access token, `CurrentUser`, `AuthInterceptor`). `docs/ai/contracts/B01-auth.md`
+was updated after P3 to match (see section 11).
 
 ## 1. Roles
 
@@ -183,7 +183,6 @@ session is **always** revalidated with `GET /api/v1/auth/me` and the returned us
 
 ## 11. Requests for contract changes
 
-* **B01-auth.md (owner approval needed, not edited by P3):** §2 shows `roles = ["ADMIN","USER"]` and `permissions = []
-  (filled by B01-P3)`. After P3 the role is `CUSTOMER` and `permissions` is populated. Please update the example to
-  `["ADMIN","CUSTOMER"]` and the permission note.
+* **B01-auth.md — applied.** §2 showed `roles = ["ADMIN","USER"]` and `permissions = []`. The documentation cleanup changed the
+  example to `["ADMIN","CUSTOMER"]` and describes `permissions` as populated from the database. Nothing else in that contract changed.
 * Other modules append requests here; they do not edit this module's code.

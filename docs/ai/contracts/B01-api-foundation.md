@@ -1,7 +1,7 @@
 # Contract: B01-F1 — API foundation
 
 Owner: B01-F1. Permanent. Dual-mode (legacy + `/api/v1`) until the end of B12.
-Source of the rules: `docs/ai/03_AGENT_PROMPTS_V2.md` Section 1.6.
+The rules this contract implements are in `CLAUDE.md`, section 5 (API contract).
 
 ## 1. Java API (`com.example.backend.api`)
 
