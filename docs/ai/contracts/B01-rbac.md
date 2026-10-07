@@ -75,20 +75,50 @@ token from the freshly loaded user, so a refresh picks up permission changes).
 
 ## 7. Permission loading strategy
 
+**Status: NOT MEASURED. The requirement "one query joining user -> roles -> permissions when issuing a token" is NOT
+demonstrated by this implementation (see "Open blocker" below).**
+
 * `Role.permissions` is a `@ManyToMany` through `role_permissions`, mapped **EAGER + `@BatchSize(50)`**. `User.roles` remains
   EAGER (unchanged).
 * **Why EAGER:** `JwtService` and `UserResponse.from` read the data outside a guaranteed persistence context, and the owner
-  forbade a design that can throw `LazyInitializationException`. `AuthService` is not allowed to change beyond role constants,
-  so permissions cannot be passed in explicitly. `RoleEagerPermissionsTest` fails if the mapping is made lazy.
-* **No per-permission / per-role queries:** `@BatchSize` loads the permissions of every role in the session with one
-  statement. Issuing a token or building a response performs **no additional query** — it reads the already-loaded graph.
-* **Trade-off (NOT measured — no Maven/PostgreSQL-backed run was possible):** every load of a `User` entity (login, `AuthGuard.requireUser`, refresh) now also
-  loads its roles' permissions: expected +1 batched statement per load. `AuthInterceptor` is unaffected (it still only calls
-  `existsByIdAndActiveTrue`). If measurement shows this matters, the alternative is a single JPQL
-  `select distinct p.code from User u join u.roles r join r.permissions p where u.id = :id` plus a change to how `AuthService`
-  passes permissions on — which needs owner approval because it touches `AuthService`.
+  forbade a design that can throw `LazyInitializationException`. `AuthService` may change only role constants, so permissions
+  cannot be passed in explicitly. `RoleEagerPermissionsTest` fails if either mapping is made lazy.
+* `JwtService.issueAccessToken(User)` and `UserResponse.from(User)` issue **no query of their own**; they read the graph that was
+  loaded with the `User`.
+* **Expected (from Hibernate semantics, not observed) statement pattern**, per permission-related loading step:
+  * username/password login (`findByUsername`, an HQL query): user select, then a secondary select for `User.roles`, then the
+    `Role.permissions` collections of the loaded roles, expected as one `@BatchSize` statement; if batching does not apply as
+    intended, one statement per role. Not a single joined query.
+  * Google login: same pattern for an existing user; for a new user `roleRepository.findByName(CUSTOMER)` is an HQL query, so
+    the CUSTOMER role's `permissions` collection is an additional secondary select (empty result). Registration has the same
+    extra select.
+  * refresh and `AuthGuard.requireUser` (`findById`): Hibernate may join-fetch the eager collections into the entity load
+    statement, which could make this a single joined statement. Unverified.
+* **No per-permission query is expected** (permissions are a collection, never fetched one by one), but this is also unmeasured.
+* **Cost:** every load of a `User` entity (login, `AuthGuard.requireUser`, refresh) also loads its roles' permissions. The size
+  of that cost (+0, +1 or +1 per role statements) is unmeasured. `AuthInterceptor` is unaffected (it only calls
+  `existsByIdAndActiveTrue`).
 * **Persistence coupling (documented):** `UserResponse.from(User)` and `JwtService.issueAccessToken(User)` depend on
   `Role.permissions` being initialised. It always is while the mapping stays EAGER.
+* **Why it is not measured:** Maven Central and the other Maven mirrors are unreachable from the authoring sandbox
+  (`x-deny-reason: host_not_allowed`), `backend/mvnw` is not executable, and no Hibernate/Spring jars are available offline. To
+  measure, run `AuthController` login/google/refresh against PostgreSQL with `spring.jpa.show-sql=true` (or
+  `hibernate.generate_statistics=true`) and count statements.
+
+### Open blocker (owner decision required)
+
+The spec wording asks for one joined query when issuing a token. Satisfying it literally and safely needs one of the options
+below; none was implemented because each either touches `AuthService`/`AuthController` or adds a redundant query.
+
+1. **Accept the current design**, relaxing the requirement to "no per-permission query" once measured.
+2. **Add a single fetch-join query used by `JwtService`** (`select distinct u from User u left join fetch u.roles r left join fetch
+   r.permissions where u.id = :id`, in a repository) for the token claim. Literal compliance for the token, no `AuthService`
+   change, but it is redundant while `Role.permissions` stays EAGER (an extra statement per token).
+3. **Make `Role.permissions` LAZY and pass permissions explicitly**: one joined query, `UserResponse.from(User, List<String>)`
+   overload, minimal edits in `AuthService.issueSession`/`register` and `AuthController.me`. Cleanest and cheapest, but needs
+   approval to go beyond role constants in `AuthService`.
+4. **Load permission codes with the role row** (a PostgreSQL-specific `@Formula` aggregate on `Role`): no extra statement and no
+   lazy risk, but it is unproven here and needs a measured run first.
 
 ## 8. Security notes
 
@@ -103,8 +133,8 @@ token from the freshly loaded user, so a refresh picks up permission changes).
 
 ## 9. Database migrations (manual — Flyway is NOT active)
 
-Apply in this order: **V4 → V5 → V6** (V6 also works before V5 because it creates ADMIN/MANAGER if missing). All are idempotent
-and carry the mandatory header (legacy impact, nullability, constraint order, rollback, empty/existing DB).
+Apply in this order: **V4 → V5 → V6**. Other orders are not supported. All are idempotent and carry the mandatory header
+(legacy impact, nullability, constraint order, rollback, empty/existing DB).
 
 | File | Purpose |
 |---|---|

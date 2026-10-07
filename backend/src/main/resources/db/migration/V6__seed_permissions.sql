@@ -5,15 +5,17 @@
 --                            audit:view, user:disable - owner decision D-6), CUSTOMER none. Users receive them in their NEXT
 --                            access token (existing tokens keep their old claims for up to 15 minutes).
 -- NULLABILITY:               permissions.description is filled for every row; no NOT NULL column is added.
--- CONSTRAINT ORDER:          roles (ensure ADMIN/MANAGER exist) -> permissions -> role_permissions (FKs satisfied in order).
+-- CONSTRAINT ORDER:          roles (defensive guard) -> permissions -> role_permissions (FKs satisfied in order).
 -- DATA-LOSS / ROLLBACK RISK: None on apply. Re-running only ADDS missing rows; it never removes a mapping an operator added or
 --                            deleted by hand beyond re-inserting the documented defaults. Rollback:
 --                              DELETE FROM role_permissions;  DELETE FROM permissions;
--- EMPTY DATABASE:            Yes - needs V4 (tables) and works with or without V5 (it creates ADMIN/MANAGER if absent).
+-- EMPTY DATABASE:            Yes - apply after V4 (tables) and V5 (roles), in that order.
 -- EXISTING DATABASE:         Yes - idempotent (ON CONFLICT DO NOTHING everywhere).
 -- Manual application order: V4 -> V5 -> V6 (Flyway is not active).
 -- The Java source of truth is security/Permissions.java; PermissionsCatalogueTest fails if this file drifts from it.
 
+-- Defensive guard only: after V5 both roles already exist, so this inserts nothing. It just prevents the role_permissions
+-- inserts below from silently matching zero rows if a role is missing. It does NOT make V6 an out-of-order mechanism.
 INSERT INTO roles (name) VALUES ('ADMIN'), ('MANAGER')
 ON CONFLICT (name) DO NOTHING;
 

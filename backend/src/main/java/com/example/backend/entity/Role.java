@@ -24,7 +24,8 @@ public class Role {
     /**
      * B01-P3. EAGER on purpose (UserResponse.from(User) and JwtService read it outside any guaranteed persistence
      * context, so a lazy collection would risk LazyInitializationException; RoleEagerPermissionsTest guards this).
-     * @BatchSize loads the permissions of all roles already in the session with ONE query, never one per role/permission.
+     * @BatchSize is intended to make Hibernate initialise the permissions of all roles in the session with one statement
+     * instead of one per role. The real statement pattern has NOT been measured (see docs/ai/contracts/B01-rbac.md, section 7).
      */
     @ManyToMany(fetch = FetchType.EAGER)
     @JoinTable(
