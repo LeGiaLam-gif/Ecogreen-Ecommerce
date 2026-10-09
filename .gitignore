@@ -17,3 +17,7 @@ backend/.mvn_out.log
 # Frontend
 frontend/node_modules/
 frontend/dist/
+
+# B02: uploaded product images (runtime data, never committed)
+uploads/
+backend/uploads/

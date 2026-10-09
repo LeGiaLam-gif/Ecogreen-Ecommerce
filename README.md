@@ -17,8 +17,8 @@ admin area to keep the catalogue up to date, move orders through their statuses,
 
 ### Customer features
 
-- Browse products, filter by category and search by keyword (done in the browser over the full product list).
-- Product detail page.
+- Browse products, filter by category and search by keyword. Search, filtering and paging are done by the server (`GET /api/v1/products`, 12 per page with "load more", 300 ms debounce while typing); a keyword matches name and description.
+- Product detail page (by id or slug) with an image gallery and a struck-through compare price when the product has one.
 - Server-side shopping cart with stock checks.
 - Checkout with recipient name, phone and delivery address.
 - Choose a payment method — cash on delivery, VietQR, MoMo or VNPAY — and confirm payment on a simulated payment page
@@ -44,7 +44,7 @@ the database), but today every admin endpoint and the admin UI still require the
 ### What is not included
 
 Real payment gateway and webhooks, inventory reservation, an order state machine with history, discounts and shipping cost,
-saved addresses, product search/filter/pagination on the server, multiple product images and image upload, notifications,
+saved addresses, notifications,
 analytics events, audit log, Docker images for the app, CI pipeline, frontend tests. The planned work is described in
 [`docs/ai/MODULE_SPECS.md`](./docs/ai/MODULE_SPECS.md).
 
@@ -160,10 +160,12 @@ for f in $(ls backend/src/main/resources/db/migration/V*.sql | sort -V); do
 done
 ```
 
-On Windows, run the same files one by one with `psql ... -f <file>` in the order V2, V3, V4, V5, V6.
+On Windows, run the same files one by one with `psql ... -f <file>` in the order V2, V3, V4, V5, V6, V10, V11, V12.
 
 `V5` renames the legacy `USER` role to `CUSTOMER` and `V6` seeds the permission catalogue and the role → permission
-mapping. Without them the roles and permissions are incomplete.
+mapping. Without them the roles and permissions are incomplete. `V10`–`V12` add the catalogue columns, the product
+image table and the category tree (load `database/seed-data.sql` before them). Uploaded product images are stored in the
+directory given by `UPLOAD_DIR` (default `./uploads`, not committed).
 
 **3. Point the backend at the right database.** `application.properties` expects port 5432; Docker publishes 5433 with the
 password defined in `docker/docker-compose.yml`. For Docker, export before starting the backend:
@@ -229,7 +231,7 @@ npm run build                          # production build
 node scripts/verify-auth-refresh.mjs   # token-refresh logic, no network needed
 ```
 
-Manual smoke test: `curl -i http://localhost:8081/api/products` returns `200` with a JSON array; register a user, sign in,
+Manual smoke test: `curl -i http://localhost:8081/api/v1/products` returns `200` with `{"data":[...],"meta":{...}}`; register a user, sign in,
 add a product to the cart, check out, and open the order in the order history. As an admin, open `/admin`.
 
 ## Common issues

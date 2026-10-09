@@ -18,6 +18,8 @@ const ProductCard = ({ product }) => {
   const { addToCart } = useCart();
   const outOfStock = product.stockQuantity <= 0;
   const badge = getBadge(product);
+  // The struck-through "was" price is shown only when the API sends one that is higher than the price.
+  const hasComparePrice = product.comparePrice != null && Number(product.comparePrice) > Number(product.price);
 
   const handleAddToCart = async (e) => {
     e.stopPropagation();
@@ -35,7 +37,7 @@ const ProductCard = ({ product }) => {
 
   const handleViewDetail = (e) => {
     e.stopPropagation();
-    navigate(`/product/${product.id}`);
+    navigate(`/product/${product.slug || product.id}`);
   };
 
   return (
@@ -54,7 +56,12 @@ const ProductCard = ({ product }) => {
       <div className="product-info">
         {product.categoryName && <span className="product-category">{product.categoryName}</span>}
         <h3 className="product-name">{product.name}</h3>
-        <p className="product-price">{Number(product.price).toLocaleString()} ₫</p>
+        <p className="product-price">
+          {Number(product.price).toLocaleString()} ₫
+          {hasComparePrice && (
+            <span className="product-compare-price">{Number(product.comparePrice).toLocaleString()} ₫</span>
+          )}
+        </p>
       </div>
 
       <div className="product-actions">

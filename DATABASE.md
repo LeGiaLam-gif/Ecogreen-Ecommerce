@@ -13,10 +13,13 @@ PostgreSQL 16, database `ecogreen`. This document describes the schema that exis
 | `…/V4` | `permissions`, `role_permissions` |
 | `…/V5` | renames role `USER` → `CUSTOMER` (keeping every user's link), creates `MANAGER` |
 | `…/V6` | seeds the 27 permissions and the role → permission mapping |
+| `…/V10` | `products`: `slug`, `compare_price`, `sku`, `brand`, 5-value status CHECK, list indexes |
+| `…/V11` | `product_images` (+ copy of the legacy `products.image`) |
+| `…/V12` | `categories`: `parent_id` (tree) and `slug` |
 | `DataLoader` (at startup) | makes sure the roles `CUSTOMER`, `MANAGER`, `ADMIN` exist |
 | Hibernate `ddl-auto=update` | creates missing tables/columns from the JPA entities in development |
 
-Flyway is **not** active: the `V*.sql` files are applied by hand with `psql`, in numeric order, and are idempotent. Keep each entity
+Flyway is **not** active: the `V*.sql` files are applied by hand with `psql`, in numeric order, and are idempotent. Load `database/seed-data.sql` **before** V10/V12 (the seed does not set the new NOT NULL `slug`). Keep each entity
 and its SQL consistent (see `CLAUDE.md`).
 
 ## Relationships
@@ -51,8 +54,9 @@ roles ─┬─< user_roles >─┬─ users ─┬─< refresh_tokens
 
 | Table | Columns (key points) |
 |---|---|
-| `categories` | `name` (unique, 100), `description`. Flat list (no parent) |
-| `products` | `category_id` → `categories`, `name`, `description`, `price` (≥ 0), `stock_quantity` (≥ 0), `image` (file name or URL, never binary), `status` (`ACTIVE`, `INACTIVE`). "Deleting" a product sets `INACTIVE` so old order lines stay valid |
+| `categories` | `name` (unique, 100), `slug` (unique), `parent_id` → `categories` (`ON DELETE RESTRICT`, NULL = root), `description` |
+| `products` | `category_id` → `categories`, `name`, `slug` (unique, always contains a letter), `description`, `price` (≥ 0), `compare_price` (nullable, ≥ `price`), `sku` (nullable, unique when present), `brand`, `stock_quantity` (≥ 0), `image` (legacy: file name or URL, never binary; kept), `status` (`DRAFT`, `ACTIVE`, `OUT_OF_STOCK`, `INACTIVE`, `ARCHIVED`). "Deleting" a product sets `INACTIVE` so old order lines stay valid |
+| `product_images` | `product_id` → `products` (`ON DELETE CASCADE`), `image_url` (≤ 500), `storage_key` (uploads only), `alt_text`, `sort_order`. Uploaded files live in the directory `ecogreen.upload.dir`, not in the database |
 | `carts` | one per user (`user_id` unique, `ON DELETE CASCADE`) |
 | `cart_items` | `cart_id`, `product_id`, `quantity` (> 0); unique `(cart_id, product_id)`. Name and price are always read from `products`, not copied |
 

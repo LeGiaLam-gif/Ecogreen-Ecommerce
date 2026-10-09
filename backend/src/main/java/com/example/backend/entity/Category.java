@@ -4,7 +4,10 @@ import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "categories")
+@Table(name = "categories", indexes = {
+        @Index(name = "uq_categories_slug", columnList = "slug", unique = true),
+        @Index(name = "idx_categories_parent_id", columnList = "parent_id")
+})
 public class Category {
 
     @Id
@@ -13,6 +16,14 @@ public class Category {
 
     @Column(nullable = false, unique = true, length = 100)
     private String name;
+
+    @Column(nullable = false, length = 150)
+    private String slug;
+
+    /** Parent category; null = root. The FK is ON DELETE RESTRICT (V12), so deleting a subtree is always explicit. */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "parent_id")
+    private Category parent;
 
     @Column(columnDefinition = "TEXT")
     private String description;
@@ -42,6 +53,12 @@ public class Category {
 
     public String getDescription() { return description; }
     public void setDescription(String description) { this.description = description; }
+
+    public String getSlug() { return slug; }
+    public void setSlug(String slug) { this.slug = slug; }
+
+    public Category getParent() { return parent; }
+    public void setParent(Category parent) { this.parent = parent; }
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }

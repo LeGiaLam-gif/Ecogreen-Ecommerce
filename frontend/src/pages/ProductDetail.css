@@ -251,3 +251,39 @@
 .pd-quantity-control input { width: 50px; text-align: center; border: none; border-left: 1px solid #ccc; border-right: 1px solid #ccc; height: 32px; }
 .pd-action-error { color: #c62828; margin: 8px 0; }
 .btn-buy-now:disabled, .btn-add-to-cart-outline:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.pd-compare-price {
+  margin-left: 10px;
+  font-size: 0.9em;
+  color: #888;
+  text-decoration: line-through;
+}
+
+.pd-thumbs {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.pd-thumb {
+  width: 64px;
+  height: 64px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background: none;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.pd-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.pd-thumb-active {
+  border-color: #2e7d32;
+}

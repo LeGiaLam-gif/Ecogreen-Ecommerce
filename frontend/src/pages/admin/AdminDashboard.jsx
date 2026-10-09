@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import {
-  getAllProductsForAdmin, createProduct, updateProduct, deleteProduct,
+  getAdminProducts, createProduct, updateProduct, deleteProduct, publishProduct,
 } from '../../services/productApi';
 import { getAllCategories, createCategory, updateCategory, deleteCategory } from '../../services/categoryApi';
 import { getAllOrders, updateOrderStatus } from '../../services/orderApi';
@@ -12,7 +12,16 @@ import SalesDashboard from './SalesDashboard';
 import { resolveProductImage } from '../../utils/imageResolver';
 import './AdminDashboard.css';
 
-const emptyProduct = { name: '', price: '', image: '', description: '', stockQuantity: 0, categoryId: '', status: 'ACTIVE' };
+const emptyProduct = {
+  name: '', price: '', comparePrice: '', sku: '', brand: '', image: '', description: '', stockQuantity: 0, categoryId: '', status: 'ACTIVE',
+};
+
+// B02: the product tab is paged by the server (admin endpoint); the dashboard reads one page of up to 100 for its alerts.
+const PRODUCT_PAGE_SIZE = 20;
+const DASHBOARD_PRODUCT_SIZE = 100;
+const STATUS_LABELS = {
+  ACTIVE: 'Đang bán', DRAFT: 'Bản nháp', OUT_OF_STOCK: 'Hết hàng', INACTIVE: 'Ngừng bán', ARCHIVED: 'Lưu trữ',
+};
 const emptyCategory = { name: '', description: '' };
 
 const STATUS_MAP = {
@@ -47,6 +56,10 @@ const AdminDashboard = () => {
   const [productCategoryFilter, setProductCategoryFilter] = useState('ALL');
   const [productStockFilter, setProductStockFilter] = useState('ALL');
   const [productStatusFilter, setProductStatusFilter] = useState('ALL');
+  const [productPage, setProductPage] = useState(0);
+  const [productMeta, setProductMeta] = useState(null);
+  const [productsLoading, setProductsLoading] = useState(false);
+  const [productReload, setProductReload] = useState(0);
   const [returnStatusFilter, setReturnStatusFilter] = useState('ALL');
   const [userRoleFilter, setUserRoleFilter] = useState('ALL');
 
@@ -71,21 +84,20 @@ const AdminDashboard = () => {
       if (activeTab === 'dashboard') {
         // Tải đồng thời để tính các chỉ số vận hành và cảnh báo thời gian thực
         const [p, c, o, r, u] = await Promise.all([
-          getAllProductsForAdmin(),
+          getAdminProducts({ page: 0, size: DASHBOARD_PRODUCT_SIZE }),
           getAllCategories(),
           getAllOrders(),
           getAllReturns(),
           getAllUsers(),
         ]);
-        setProducts(p);
+        setProducts(p.items || []);
         setCategories(c);
         setOrders(o);
         setReturns(r);
         setUsers(u);
       } else if (activeTab === 'products') {
-        const [p, c] = await Promise.all([getAllProductsForAdmin(), getAllCategories()]);
-        setProducts(p);
-        setCategories(c);
+        // The product list itself is loaded (and paged / filtered by the server) in the effect below.
+        setCategories(await getAllCategories());
       } else if (activeTab === 'categories') {
         setCategories(await getAllCategories());
       } else if (activeTab === 'orders') {
@@ -102,12 +114,55 @@ const AdminDashboard = () => {
     }
   };
 
+  // Product tab: search / category / status are applied by the server; a new request cancels the previous one.
+  useEffect(() => {
+    if (activeTab !== 'products') return undefined;
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      setProductsLoading(true);
+      try {
+        const result = await getAdminProducts({
+          keyword: searchTerm.trim() || undefined,
+          categoryId: productCategoryFilter === 'ALL' ? undefined : productCategoryFilter,
+          status: productStatusFilter === 'ALL' ? undefined : productStatusFilter,
+          page: productPage,
+          size: PRODUCT_PAGE_SIZE,
+        }, { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        setProducts(result.items || []);
+        setProductMeta(result.meta || null);
+      } catch (err) {
+        if (!controller.signal.aborted) setErrorMsg(err.friendlyMessage || 'Không thể tải danh sách sản phẩm.');
+      } finally {
+        if (!controller.signal.aborted) setProductsLoading(false);
+      }
+    }, 300);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [activeTab, searchTerm, productCategoryFilter, productStatusFilter, productPage, productReload]);
+
   // --- Products Handler ---
+  const refreshProducts = () => {
+    setProductReload((n) => n + 1);
+    loadData();
+  };
+
+  const handlePublishProduct = async (id) => {
+    try {
+      await publishProduct(id);
+      refreshProducts();
+    } catch (e) {
+      alert(e.friendlyMessage || 'Không thể xuất bản sản phẩm.');
+    }
+  };
+
   const handleDeleteProduct = async (id) => {
     if (!window.confirm('Bạn có chắc chắn muốn ngừng kinh doanh sản phẩm này?')) return;
     try {
       await deleteProduct(id);
-      loadData();
+      refreshProducts();
     } catch (e) {
       alert(e.friendlyMessage || 'Thao tác thất bại.');
     }
@@ -116,6 +171,7 @@ const AdminDashboard = () => {
   const handleProductSubmit = async (e) => {
     e.preventDefault();
     try {
+      const hasCompare = currentProduct.comparePrice !== '' && currentProduct.comparePrice != null;
       const payload = {
         name: currentProduct.name,
         price: Number(currentProduct.price),
@@ -124,11 +180,18 @@ const AdminDashboard = () => {
         description: currentProduct.description,
         categoryId: Number(currentProduct.categoryId),
         status: currentProduct.status,
+        sku: currentProduct.sku || '',
+        brand: currentProduct.brand || '',
+        ...(hasCompare ? { comparePrice: Number(currentProduct.comparePrice) } : {}),
       };
-      if (isEditProduct) await updateProduct(currentProduct.id, payload);
-      else await createProduct(payload);
+      if (isEditProduct) {
+        // PATCH: an emptied compare-price field must be cleared explicitly.
+        await updateProduct(currentProduct.id, hasCompare ? payload : { ...payload, clearComparePrice: true });
+      } else {
+        await createProduct(payload);
+      }
       setIsProductModalOpen(false);
-      loadData();
+      refreshProducts();
     } catch (err) {
       alert(err.friendlyMessage || 'Không thể lưu thông tin sản phẩm.');
     }
@@ -201,6 +264,7 @@ const AdminDashboard = () => {
   // Tính toán nhanh các chỉ số vận hành cần xử lý (Action Items)
   const pendingOrders = orders.filter(o => o.status === 'PENDING');
   const pendingReturns = returns.filter(r => r.status === 'PENDING');
+  // Dashboard alert: counted over the newest page of up to 100 products (see DASHBOARD_PRODUCT_SIZE).
   const lowStockProducts = products.filter(p => p.stockQuantity <= 10);
   const recentOrders = [...orders].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 5);
 
@@ -213,10 +277,8 @@ const AdminDashboard = () => {
     users: '👥 Quản lý Người dùng & Phân quyền',
   };
 
-  // Lọc sản phẩm theo điều kiện
+  // Tìm kiếm, danh mục và trạng thái do máy chủ lọc; bộ lọc tồn kho áp dụng trên trang đang hiển thị
   const filteredProducts = products.filter(p => {
-    const matchSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchCategory = productCategoryFilter === 'ALL' || String(p.categoryId) === String(productCategoryFilter);
     const matchStock = productStockFilter === 'ALL'
       ? true
       : productStockFilter === 'LOW_STOCK'
@@ -224,8 +286,7 @@ const AdminDashboard = () => {
         : productStockFilter === 'OUT_OF_STOCK'
           ? p.stockQuantity <= 0
           : p.stockQuantity > 10;
-    const matchStatus = productStatusFilter === 'ALL' || p.status === productStatusFilter;
-    return matchSearch && matchCategory && matchStock && matchStatus;
+    return matchStock;
   });
 
   // Lọc đơn hàng theo điều kiện
@@ -498,12 +559,12 @@ const AdminDashboard = () => {
                     type="text"
                     placeholder="Tìm sản phẩm theo tên..."
                     value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
+                    onChange={(e) => { setSearchTerm(e.target.value); setProductPage(0); }}
                     className="admin-search-input"
                   />
                   <select
                     value={productCategoryFilter}
-                    onChange={(e) => setProductCategoryFilter(e.target.value)}
+                    onChange={(e) => { setProductCategoryFilter(e.target.value); setProductPage(0); }}
                     className="admin-filter-select"
                   >
                     <option value="ALL">Tất cả danh mục ({categories.length})</option>
@@ -521,12 +582,15 @@ const AdminDashboard = () => {
                   </select>
                   <select
                     value={productStatusFilter}
-                    onChange={(e) => setProductStatusFilter(e.target.value)}
+                    onChange={(e) => { setProductStatusFilter(e.target.value); setProductPage(0); }}
                     className="admin-filter-select"
                   >
                     <option value="ALL">Tất cả trạng thái</option>
                     <option value="ACTIVE">Đang kinh doanh</option>
+                    <option value="DRAFT">Bản nháp</option>
+                    <option value="OUT_OF_STOCK">Hết hàng (trạng thái)</option>
                     <option value="INACTIVE">Ngừng bán</option>
+                    <option value="ARCHIVED">Lưu trữ</option>
                   </select>
                 </div>
 
@@ -565,10 +629,22 @@ const AdminDashboard = () => {
                             className="admin-thumb"
                           />
                         </td>
-                        <td className="admin-cell-strong">{p.name}</td>
+                        <td className="admin-cell-strong">
+                          {p.name}
+                          {(p.sku || p.brand) && (
+                            <div className="admin-cell-muted" style={{ fontWeight: 400, fontSize: '0.8em' }}>
+                              {[p.brand, p.sku].filter(Boolean).join(' · ')}
+                            </div>
+                          )}
+                        </td>
                         <td className="admin-cell-muted">{p.categoryName}</td>
                         <td className="admin-cell-price">
                           {Number(p.price).toLocaleString('vi-VN')} ₫
+                          {p.comparePrice != null && Number(p.comparePrice) > Number(p.price) && (
+                            <div style={{ textDecoration: 'line-through', color: '#888', fontSize: '0.8em' }}>
+                              {Number(p.comparePrice).toLocaleString('vi-VN')} ₫
+                            </div>
+                          )}
                         </td>
                         <td>
                           <span className={`admin-badge-stock ${p.stockQuantity <= 0 ? 'stock-empty' : p.stockQuantity <= 10 ? 'stock-low' : 'stock-ok'}`}>
@@ -577,7 +653,7 @@ const AdminDashboard = () => {
                         </td>
                         <td>
                           <span className={`admin-badge-status ${p.status === 'ACTIVE' ? 'status-active' : 'status-inactive'}`}>
-                            {p.status === 'ACTIVE' ? 'Đang bán' : 'Ngừng bán'}
+                            {STATUS_LABELS[p.status] || p.status}
                           </span>
                         </td>
                         <td style={{ textAlign: 'center' }}>
@@ -591,6 +667,14 @@ const AdminDashboard = () => {
                           >
                             Sửa
                           </button>
+                          {p.status === 'DRAFT' && (
+                            <button
+                              onClick={() => handlePublishProduct(p.id)}
+                              className="admin-btn-action-edit"
+                            >
+                              Xuất bản
+                            </button>
+                          )}
                           <button
                             onClick={() => handleDeleteProduct(p.id)}
                             className="admin-btn-action-delete"
@@ -603,7 +687,28 @@ const AdminDashboard = () => {
                   </tbody>
                 </table>
                 {filteredProducts.length === 0 && (
-                  <div className="admin-empty">Không tìm thấy sản phẩm nào phù hợp với bộ lọc.</div>
+                  <div className="admin-empty">
+                    {productsLoading ? 'Đang tải sản phẩm...' : 'Không tìm thấy sản phẩm nào phù hợp với bộ lọc.'}
+                  </div>
+                )}
+                {productMeta && productMeta.totalPages > 1 && (
+                  <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '12px', padding: '12px' }}>
+                    <button
+                      className="admin-btn-secondary"
+                      disabled={productPage <= 0}
+                      onClick={() => setProductPage((n) => Math.max(0, n - 1))}
+                    >
+                      ← Trước
+                    </button>
+                    <span>Trang {productMeta.page + 1} / {productMeta.totalPages} ({productMeta.totalElements} sản phẩm)</span>
+                    <button
+                      className="admin-btn-secondary"
+                      disabled={productPage + 1 >= productMeta.totalPages}
+                      onClick={() => setProductPage((n) => n + 1)}
+                    >
+                      Sau →
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
@@ -1020,6 +1125,40 @@ const AdminDashboard = () => {
                 </div>
               </div>
 
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label className="admin-form-label">Giá so sánh (₫)</label>
+                  <input
+                    type="number"
+                    step="1000"
+                    placeholder="Tùy chọn"
+                    value={currentProduct.comparePrice ?? ''}
+                    onChange={(e) => setCurrentProduct({ ...currentProduct, comparePrice: e.target.value })}
+                    className="admin-form-input"
+                  />
+                </div>
+                <div>
+                  <label className="admin-form-label">SKU</label>
+                  <input
+                    type="text"
+                    maxLength={64}
+                    value={currentProduct.sku || ''}
+                    onChange={(e) => setCurrentProduct({ ...currentProduct, sku: e.target.value })}
+                    className="admin-form-input"
+                  />
+                </div>
+                <div>
+                  <label className="admin-form-label">Thương hiệu</label>
+                  <input
+                    type="text"
+                    maxLength={100}
+                    value={currentProduct.brand || ''}
+                    onChange={(e) => setCurrentProduct({ ...currentProduct, brand: e.target.value })}
+                    className="admin-form-input"
+                  />
+                </div>
+              </div>
+
               <div>
                 <label className="admin-form-label">Hình ảnh (URL hoặc tên file trong assets/products)</label>
                 <input
@@ -1042,19 +1181,24 @@ const AdminDashboard = () => {
                 />
               </div>
 
-              {isEditProduct && (
-                <div>
-                  <label className="admin-form-label">Trạng thái kinh doanh</label>
-                  <select
-                    value={currentProduct.status}
-                    onChange={(e) => setCurrentProduct({ ...currentProduct, status: e.target.value })}
-                    className="admin-form-select"
-                  >
-                    <option value="ACTIVE">Đang kinh doanh (ACTIVE)</option>
-                    <option value="INACTIVE">Ngừng kinh doanh (INACTIVE)</option>
-                  </select>
-                </div>
-              )}
+              <div>
+                <label className="admin-form-label">Trạng thái kinh doanh</label>
+                <select
+                  value={currentProduct.status}
+                  onChange={(e) => setCurrentProduct({ ...currentProduct, status: e.target.value })}
+                  className="admin-form-select"
+                >
+                  <option value="ACTIVE">Đang kinh doanh (ACTIVE)</option>
+                  <option value="DRAFT">Bản nháp (DRAFT)</option>
+                  {isEditProduct && (
+                    <>
+                      <option value="OUT_OF_STOCK">Hết hàng (OUT_OF_STOCK)</option>
+                      <option value="INACTIVE">Ngừng kinh doanh (INACTIVE)</option>
+                      <option value="ARCHIVED">Lưu trữ (ARCHIVED)</option>
+                    </>
+                  )}
+                </select>
+              </div>
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px' }}>
                 <button

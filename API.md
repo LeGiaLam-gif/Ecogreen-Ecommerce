@@ -42,25 +42,29 @@ Permission-based checks (`requirePermission`) exist in the backend but **no endp
 
 `user` = `{ id, username, email, active, roles, permissions }`. Details and semantics: `docs/ai/contracts/B01-auth.md`.
 
-## Products — `/api/products`
+## Catalogue — `/api/v1` (B02)
+
+Envelope, errors and paging follow `docs/ai/contracts/B01-api-foundation.md`; full detail in `docs/ai/contracts/B02-catalog.md`.
+The legacy `/api/products` and `/api/categories` endpoints were removed.
 
 | Method | Path | Access | Notes |
 |---|---|---|---|
-| GET | `/` | Public | active products only; no paging or search parameters |
-| GET | `/{id}` | Public | |
-| GET | `/admin/all` | Admin | includes inactive products |
-| POST | `/` | Admin | `{ name, description, price, stockQuantity, image, categoryId }` |
-| PUT | `/{id}` | Admin | same fields plus `status` (`ACTIVE` / `INACTIVE`) |
-| DELETE | `/{id}` | Admin | soft delete: status becomes `INACTIVE` |
+| GET | `/products` | Public | `ACTIVE` only. Query: `keyword, categoryId, minPrice, maxPrice, inStock, page, size (default 12, max 100), sort` (`createdAt`, `price`, `name`) |
+| GET | `/products/{idOrSlug}` | Public | digits = id, otherwise slug; non-active → 404 |
+| GET | `/admin/products` | `product:view` | all statuses; same query plus `status` |
+| POST | `/admin/products` | `product:create` | `{ name, description, price, comparePrice, stockQuantity, image, categoryId, sku, brand, status (DRAFT or ACTIVE) }` → 201 |
+| PATCH | `/admin/products/{id}` | `product:update` | partial; `status` may be any of `DRAFT, ACTIVE, OUT_OF_STOCK, INACTIVE, ARCHIVED` |
+| POST | `/admin/products/{id}/publish` | `product:publish` | needs name, price > 0, category, ≥ 1 image (legacy image counts) |
+| DELETE | `/admin/products/{id}` | `product:delete` | soft delete: status becomes `INACTIVE` (204) |
+| POST | `/admin/products/{id}/images` | `product:update` | multipart `file` (JPEG/PNG/WebP, ≤ 5 MB, checked by content) + optional `altText` |
+| DELETE | `/admin/products/{id}/images/{imageId}` | `product:update` | 204 |
+| GET | `/categories` | Public | flat; `?tree=true` for the tree |
+| POST | `/admin/categories` | `category:create` | `{ name, description, parentId }` → 201 |
+| PATCH | `/admin/categories/{id}` | `category:update` | `{ name, description, parentId }` (replaces all three) |
+| DELETE | `/admin/categories/{id}` | `category:delete` | 409 while it has products or child categories |
+| GET | `/files/{key}` | Public | uploaded image (binary, `nosniff`) |
 
-## Categories — `/api/categories`
-
-| Method | Path | Access | Body |
-|---|---|---|---|
-| GET | `/` | Public | |
-| POST | `/` | Admin | `{ name, description }` |
-| PUT | `/{id}` | Admin | `{ name, description }` |
-| DELETE | `/{id}` | Admin | |
+Product fields: `id, categoryId, categoryName, name, slug, description, price, comparePrice, stockQuantity, sku, brand, status, image (legacy: first image URL), images[{id,url,altText,sortOrder}]`.
 
 ## Cart — `/api/cart` (User; always the caller's own cart)
 

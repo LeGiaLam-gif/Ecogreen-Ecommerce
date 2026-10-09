@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -221,6 +222,13 @@ public class GlobalExceptionHandler {
         Map<String, String> fields = new LinkedHashMap<>();
         putField(fields, ex.getParameterName(), "Tham số bắt buộc.");
         return validation(request, fields);
+    }
+
+    /** B02: an upload over the configured multipart limit is a client error (400), not a 500. */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<Object> handleMaxUploadSize(MaxUploadSizeExceededException ex, HttpServletRequest request) {
+        return respond(request, HttpStatus.BAD_REQUEST, ApiErrorCode.VALIDATION_ERROR,
+                "Tệp tải lên vượt quá dung lượng cho phép (tối đa 5 MB).");
     }
 
     // ── catch-alls: never expose exception text ──────────────────────────────

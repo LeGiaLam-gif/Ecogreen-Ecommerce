@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useCart } from '../context/CartContext';
-import { getProductById } from '../services/productApi';
+import { getProductByIdOrSlug } from '../services/productApi';
 import { resolveProductImage } from '../utils/imageResolver';
 import './ProductDetail.css';
 
@@ -15,14 +15,16 @@ const ProductDetail = () => {
     const [loading, setLoading] = useState(true);
     const [quantity, setQuantity] = useState(1);
     const [actionError, setActionError] = useState('');
+    const [activeImage, setActiveImage] = useState(0);
 
     useEffect(() => {
         const fetchProduct = async () => {
             try {
                 setLoading(true);
-                const data = await getProductById(id);
+                const data = await getProductByIdOrSlug(id);
                 setProduct(data);
                 setQuantity(1);
+                setActiveImage(0);
             } catch {
                 setProduct(null);
             } finally {
@@ -34,6 +36,16 @@ const ProductDetail = () => {
     }, [id]);
 
     const outOfStock = product && product.stockQuantity <= 0;
+
+    // Gallery from product.images; products without gallery rows fall back to the legacy single image field.
+    const gallery = product
+        ? (product.images && product.images.length > 0
+            ? product.images
+            : (product.image ? [{ id: 'legacy', url: product.image, altText: null }] : []))
+        : [];
+    const shown = gallery[Math.min(activeImage, Math.max(gallery.length - 1, 0))];
+    // Strike-through only when the API sends a compare price that is higher than the price.
+    const hasComparePrice = product && product.comparePrice != null && Number(product.comparePrice) > Number(product.price);
 
     const requireLogin = () => {
         if (!user) {
@@ -94,11 +106,25 @@ const ProductDetail = () => {
                   <div className="pd-media">
                       <div className="pd-image-box">
                           <img
-                             src={resolveProductImage(product.image)}
-                             alt={product.name}
+                             src={resolveProductImage(shown ? shown.url : product.image)}
+                             alt={(shown && shown.altText) || product.name}
                              className="pd-main-img"
                           />
                       </div>
+                      {gallery.length > 1 && (
+                          <div className="pd-thumbs">
+                              {gallery.map((img, index) => (
+                                  <button
+                                      key={img.id}
+                                      type="button"
+                                      className={`pd-thumb ${index === activeImage ? 'pd-thumb-active' : ''}`}
+                                      onClick={() => setActiveImage(index)}
+                                  >
+                                      <img src={resolveProductImage(img.url)} alt={img.altText || product.name} />
+                                  </button>
+                              ))}
+                          </div>
+                      )}
                   </div>
 
                   <div className="pd-info">
@@ -108,6 +134,9 @@ const ProductDetail = () => {
                           <div className="pd-price-badge">
                               <span className="pd-price-label">Giá:</span>
                               <span className="pd-current-price">{Number(product.price).toLocaleString()} ₫</span>
+                              {hasComparePrice && (
+                                  <span className="pd-compare-price">{Number(product.comparePrice).toLocaleString()} ₫</span>
+                              )}
                           </div>
                           <p className={outOfStock ? 'pd-stock-out' : 'pd-stock-in'}>
                               {outOfStock ? 'Hết hàng' : `Còn hàng: ${product.stockQuantity} sản phẩm`}
