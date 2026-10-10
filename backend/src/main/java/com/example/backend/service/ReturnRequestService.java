@@ -1,6 +1,7 @@
 package com.example.backend.service;
 
 import com.example.backend.entity.Order;
+import com.example.backend.entity.OrderStatus;
 import com.example.backend.entity.ReturnRequest;
 import com.example.backend.entity.User;
 import com.example.backend.exception.BadRequestException;
@@ -30,7 +31,8 @@ public class ReturnRequestService {
         if (!order.getUser().getId().equals(userId)) {
             throw new BadRequestException("Bạn không có quyền thực hiện thao tác này.");
         }
-        if (order.getStatus() != Order.Status.PAID) {
+        // B05: a delivered order can be returned; legacy PAID orders stay returnable (decision D-4 default).
+        if (order.getStatus() != OrderStatus.PAID && order.getStatus() != OrderStatus.DELIVERED) {
             throw new BadRequestException("Chỉ có thể yêu cầu đổi/trả cho đơn hàng đã thanh toán.");
         }
 

@@ -132,7 +132,9 @@ const Payment = () => {
   // Amount is totalPrice from order or payment amount
   const amount = payment?.amount ?? order?.totalPrice ?? 0;
   const transferContent = `ECOGREEN ${orderId}`;
-  const alreadyPaid = payment?.status === 'SUCCESS' || order?.status === 'PAID';
+  const PAID_STATUSES = ['PAID', 'PROCESSING', 'PACKED', 'SHIPPED', 'DELIVERED'];
+  const alreadyPaid = payment?.status === 'SUCCESS' || PAID_STATUSES.includes(order?.status);
+  const isCancelled = order?.status === 'CANCELLED';
 
   // VietQR Deep link / image
   const vietQRUrl = `https://img.vietqr.io/image/${STORE_PAYMENT_CONFIG.bank.bankCode}-${STORE_PAYMENT_CONFIG.bank.accountNo}-compact2.jpg?amount=${amount}&addInfo=${encodeURIComponent(transferContent)}&accountName=${encodeURIComponent(STORE_PAYMENT_CONFIG.bank.accountName)}`;
@@ -152,7 +154,7 @@ const Payment = () => {
           <div className="pay-header-info">
             <h1 className="pay-heading">Thanh toán đơn hàng #{orderId}</h1>
             <span className="pay-order-status-badge">
-              {alreadyPaid ? '✅ ĐÃ THANH TOÁN' : '⏳ CHỜ THANH TOÁN'}
+              {isCancelled ? '❌ ĐÃ HỦY' : alreadyPaid ? '✅ ĐÃ THANH TOÁN' : '⏳ CHỜ THANH TOÁN'}
             </span>
           </div>
 

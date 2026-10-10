@@ -15,10 +15,9 @@ Use: give an agent `CLAUDE.md` + sections 1–3 of this file + **exactly one** m
 |---|---|---|
 | B01-P1 Google ID-token verification | **Done** | `security/GoogleApiIdentityVerifier` verifies signature, issuer, audience and expiry; Google login is disabled (fails closed) when `GOOGLE_CLIENT_ID` is empty |
 | B01-F1 API foundation | **Done** | `api/` package, dual-mode `GlobalExceptionHandler`, `http.js` unwrapping — contract `contracts/B01-api-foundation.md` |
-| B01-P2 JWT + rotating refresh tokens | **Done** | `JwtService`, `RefreshTokenService`, `/api/v1/auth/*` — contract `contracts/B01-auth.md` |
-| B01-P3 Permission-based RBAC | **Done** (one open decision, see 4) | `Permissions.java`, `AuthGuard.requirePermission`, V4–V6 — contract `contracts/B01-rbac.md`. The B02 catalogue controllers use `requirePermission`; the five other controllers (`OrderController`, `UserController`, `ReturnRequestController`, `StatsController`, `AdminController`) still call `requireAdmin()` |
+| B01-P2 JWT + rotating refresh tokens | **Done** | `JwtService`, `RefreshTokenService`, `/api/v1/auth/*` — contract `contracts/B01-auth.md` || B01-P3 Permission-based RBAC | **Done** (one open decision, see 4) | `Permissions.java`, `AuthGuard.requirePermission`, V4–V6 — contract `contracts/B01-rbac.md`. The B02 catalogue controllers use `requirePermission`; the five other controllers (`OrderController`, `UserController`, `ReturnRequestController`, `StatsController`, `AdminController`) still call `requireAdmin()` |
 | B02 Catalog | **Done** | `ProductSearchCriteria`/`ProductSpecifications` server-side search, `product_images`, category tree, `/api/v1` catalogue controllers, V10–V12, `Home.jsx` on the server — contract `contracts/B02-catalog.md`. Legacy `/api/products` and `/api/categories` removed |
-| B05 Order | Not started | order status is `PENDING/CONFIRMED/PAID/CANCELLED`; `OrderService.updateStatus` does not validate transitions; no status history |
+| B05 Order | **Done** | 10-status state machine with one writer (`OrderService.transitionStatus`), `order_status_history`, `InventoryGateway` + legacy adapter, `/api/v1` order endpoints, V20–V22 — contract `contracts/B05-order.md` |
 | B03 Inventory | Not started | stock is `products.stock_quantity`, decremented at checkout; nothing restores it |
 | B08 Customer | Not started | `UserController` only lists and deletes; no addresses; no enable/disable endpoint |
 | B04 Cart & Checkout | Not started | no discounts or shipping cost; legacy `POST /api/orders` and `/api/cart/*` |

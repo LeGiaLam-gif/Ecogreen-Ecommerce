@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { getOrderById } from '../services/orderApi';
+import { getOrderById, cancelOrder } from '../services/orderApi';
+import { orderStatusInfo } from '../utils/orderStatus';
 import { createReturnRequest, getMyReturns } from '../services/returnApi';
 import { resolveProductImage } from '../utils/imageResolver';
 import './OrderDetail.css';
@@ -22,6 +23,7 @@ const OrderDetail = () => {
   const [returnImage, setReturnImage] = useState('');
   const [submittingReturn, setSubmittingReturn] = useState(false);
   const [returnSuccess, setReturnSuccess] = useState('');
+  const [cancelling, setCancelling] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -60,6 +62,18 @@ const OrderDetail = () => {
     }
   };
 
+  const handleCancel = async () => {
+    if (!window.confirm('Bạn có chắc chắn muốn hủy đơn hàng này?')) return;
+    setCancelling(true);
+    try {
+      setOrder(await cancelOrder(id));
+    } catch (err) {
+      alert(err.friendlyMessage || 'Không thể hủy đơn hàng.');
+    } finally {
+      setCancelling(false);
+    }
+  };
+
   if (loading) {
     return (
       <div style={{ textAlign: 'center', padding: '60px' }}>
@@ -80,20 +94,17 @@ const OrderDetail = () => {
 
   // Calculate timeline steps
   const isCancelled = order.status === 'CANCELLED';
+  // Steps 1..5 = placed, confirmed, packed, shipping, done. Statuses past DELIVERED (return flow) show all steps done.
+  const STEP_BY_STATUS = { PENDING_PAYMENT: 1, PAID: 2, PROCESSING: 3, PACKED: 4, SHIPPED: 5 };
   const getStepClass = (stepIndex) => {
     if (isCancelled) return '';
-    if (order.status === 'PAID') return 'completed';
-    if (order.status === 'CONFIRMED') {
-      if (stepIndex <= 2) return 'completed';
-      if (stepIndex === 3) return 'active';
-      return '';
-    }
-    if (order.status === 'PENDING') {
-      if (stepIndex === 1) return 'active';
-      return '';
-    }
-    return '';
+    const current = STEP_BY_STATUS[order.status];
+    if (current === undefined) return 'completed';
+    if (stepIndex < current) return 'completed';
+    return stepIndex === current ? 'active' : '';
   };
+  const statusInfo = orderStatusInfo(order.status);
+  const canReturn = (order.status === 'PAID' || order.status === 'DELIVERED') && !existingReturn;
 
   return (
     <div className="od-page">
@@ -144,10 +155,7 @@ const OrderDetail = () => {
             </p>
           </div>
           <span className={`od-status-tag ${order.status}`}>
-            {order.status === 'PAID' && '✅ Đã thanh toán & Giao thành công'}
-            {order.status === 'CONFIRMED' && '📦 Đang xử lý giao hàng'}
-            {order.status === 'PENDING' && '⏳ Chờ thanh toán'}
-            {order.status === 'CANCELLED' && '❌ Đã hủy'}
+            {statusInfo.icon} {statusInfo.label}
           </span>
         </div>
 
@@ -224,11 +232,19 @@ const OrderDetail = () => {
         <div className="od-summary-section">
           <div className="od-summary-row">
             <span>Tạm tính</span>
-            <span>{fmtVND(order.totalPrice)}</span>
+            <span>{fmtVND(order.subtotal ?? order.totalPrice)}</span>
           </div>
+          {Number(order.discountAmount) > 0 && (
+            <div className="od-summary-row">
+              <span>Giảm giá{order.discountCode ? ` (${order.discountCode})` : ''}</span>
+              <span>-{fmtVND(order.discountAmount)}</span>
+            </div>
+          )}
           <div className="od-summary-row">
             <span>Phí đóng gói & giao hàng xanh</span>
-            <span style={{ color: '#2e7d32', fontWeight: 600 }}>Miễn phí 🌿</span>
+            {Number(order.shippingFee) > 0
+              ? <span>{fmtVND(order.shippingFee)}</span>
+              : <span style={{ color: '#2e7d32', fontWeight: 600 }}>Miễn phí 🌿</span>}
           </div>
           <div className="od-summary-row total">
             <span>Tổng thanh toán</span>
@@ -238,13 +254,19 @@ const OrderDetail = () => {
 
         {/* Actions Bar */}
         <div className="od-actions-bar">
-          {order.status === 'PENDING' && (
+          {order.status === 'PENDING_PAYMENT' && (
             <Link to={`/payment/${order.id}`} className="od-btn-pay">
               💳 Thanh toán ngay ({fmtVND(order.totalPrice)})
             </Link>
           )}
 
-          {order.status === 'PAID' && !existingReturn && (
+          {order.canCancel && (
+            <button className="od-btn-cancel" onClick={handleCancel} disabled={cancelling}>
+              {cancelling ? 'Đang hủy...' : '❌ Hủy đơn hàng'}
+            </button>
+          )}
+
+          {canReturn && (
             <button
               className="od-btn-return"
               onClick={() => setShowReturnModal(true)}

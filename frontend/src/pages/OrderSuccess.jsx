@@ -1,13 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { getOrderById } from '../services/orderApi';
-
-const STATUS_MAP = {
-  PENDING: '⏳ Chờ thanh toán',
-  CONFIRMED: '📦 Đang chuẩn bị hàng',
-  PAID: '✅ Đã thanh toán thành công',
-  CANCELLED: '❌ Đã hủy',
-};
+import { orderStatusInfo } from '../utils/orderStatus';
 
 const OrderSuccess = () => {
   const { orderId } = useParams();
@@ -34,7 +28,7 @@ const OrderSuccess = () => {
           Tổng thanh toán: {Number(order.totalPrice).toLocaleString('vi-VN')} ₫
         </p>
         <p style={{ color: '#64748b', margin: 0, fontSize: '0.9rem' }}>
-          Trạng thái: <strong>{STATUS_MAP[order.status] || order.status}</strong>
+          Trạng thái: <strong>{orderStatusInfo(order.status).icon} {orderStatusInfo(order.status).label}</strong>
         </p>
       </div>
 

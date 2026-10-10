@@ -1,25 +1,24 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getMyOrders } from '../services/orderApi';
-
-const STATUS_MAP = {
-  PENDING: { label: '⏳ Chờ thanh toán', color: '#b45309', bg: '#fef3c7' },
-  CONFIRMED: { label: '📦 Đang chuẩn bị hàng', color: '#0369a1', bg: '#e0f2fe' },
-  PAID: { label: '✅ Đã thanh toán / Hoàn tất', color: '#15803d', bg: '#dcfce7' },
-  CANCELLED: { label: '❌ Đã hủy', color: '#b91c1c', bg: '#fee2e2' },
-};
+import { orderStatusInfo } from '../utils/orderStatus';
 
 const Orders = () => {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [page, setPage] = useState(0);
+  const [meta, setMeta] = useState({ totalPages: 1 });
 
   useEffect(() => {
-    getMyOrders()
-      .then(setOrders)
+    getMyOrders({ page, size: 10 })
+      .then(({ items, meta: m }) => {
+        setOrders(items);
+        setMeta(m);
+      })
       .catch((err) => setError(err.friendlyMessage || 'Không thể tải danh sách đơn hàng.'))
       .finally(() => setLoading(false));
-  }, []);
+  }, [page]);
 
   if (loading) return <div className="pd-loading"><div className="spinner"></div></div>;
 
@@ -43,7 +42,7 @@ const Orders = () => {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
           {orders.map((order) => {
-            const statusInfo = STATUS_MAP[order.status] || { label: order.status, color: '#333', bg: '#f1f5f9' };
+            const statusInfo = orderStatusInfo(order.status);
             return (
               <Link
                 to={`/orders/${order.id}`}
@@ -82,13 +81,21 @@ const Orders = () => {
                       fontWeight: 600,
                       fontSize: '0.82rem',
                     }}>
-                      {statusInfo.label}
+                      {statusInfo.icon} {statusInfo.label}
                     </span>
                   </div>
                 </div>
               </Link>
             );
           })}
+        </div>
+      )}
+
+      {meta.totalPages > 1 && (
+        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '14px', marginTop: '20px' }}>
+          <button type="button" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>← Trước</button>
+          <span>Trang {page + 1} / {meta.totalPages}</span>
+          <button type="button" disabled={page + 1 >= meta.totalPages} onClick={() => setPage((p) => p + 1)}>Sau →</button>
         </div>
       )}
     </div>

@@ -64,7 +64,8 @@ roles ─┬─< user_roles >─┬─ users ─┬─< refresh_tokens
 
 | Table | Columns (key points) |
 |---|---|
-| `orders` | `user_id`, snapshot of `customer_name`, `customer_phone`, `shipping_address`, `total_price`, `status` (`PENDING`, `CONFIRMED`, `PAID`, `CANCELLED`) |
+| `orders` | `user_id`, snapshot of `customer_name`, `customer_phone`, `shipping_address`, `subtotal`, `discount_amount`, `shipping_fee` (default 0), `discount_code`, `total_price`, `status` (10 values: `PENDING_PAYMENT`, `PAID`, `PROCESSING`, `PACKED`, `SHIPPED`, `DELIVERED`, `CANCELLED`, `RETURN_REQUESTED`, `RETURNED`, `REFUNDED`; default `PENDING_PAYMENT`; `V20`). Indexes `(user_id, created_at DESC)` and `(status, created_at DESC)` (`V22`) |
+| `order_status_history` | `order_id` (`ON DELETE CASCADE`), `old_status` (null for the first row), `new_status`, `changed_by` (`ON DELETE SET NULL`), `note`, `changed_at`; index `(order_id, changed_at)` (`V21`) |
 | `order_items` | `order_id` (`ON DELETE CASCADE`), `product_id`, `quantity` (> 0), `price` = unit price **at purchase time** |
 | `payments` | `order_id`, `payment_method` (free text; the UI sends `COD`, `VIETQR`, `MOMO`, `VNPAY`), `amount`, `status` (`PENDING`, `SUCCESS`, `FAILED`), `transaction_id` (fake `MOCK-…` value). Simulated; no gateway |
 | `return_requests` | `order_id`, `user_id`, `reason`, `description`, `image_url` (one link), `status` (`PENDING`, `APPROVED`, `REJECTED`), `admin_note` |
