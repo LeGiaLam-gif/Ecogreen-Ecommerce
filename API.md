@@ -80,11 +80,23 @@ Product fields: `id, categoryId, categoryName, name, slug, description, price, c
 
 | Method | Path | Access | Notes |
 |---|---|---|---|
-| POST | `/` | User | `{ customerName, customerPhone, shippingAddress, paymentMethod? }` (default `COD`). One transaction: validate stock → create order and items with price snapshot → deduct stock → create `PENDING` payment → empty cart |
-| GET | `/my` | User | the caller's orders |
-| GET | `/` | Admin | all orders |
-| GET | `/{id}` | Owner or Admin | with items |
-| PUT | `/{id}/status` | Admin | `{ status }` — `PENDING`, `CONFIRMED`, `PAID`, `CANCELLED`; transitions are **not** validated and stock is not restored on cancel |
+| POST | `/` | User | `{ customerName, customerPhone, shippingAddress, paymentMethod? }` (default `COD`). One transaction: validate stock → create the order (`PENDING_PAYMENT`) and items with price snapshot → deduct stock → write the first history row → create `PENDING` payment → empty cart |
+
+Reading and changing orders is on `/api/v1` (envelope `{data, meta}`, paging `page`/`size`/`sort`). Contract: [`docs/ai/contracts/B05-order.md`](./docs/ai/contracts/B05-order.md).
+
+Statuses: `PENDING_PAYMENT`, `PAID`, `PROCESSING`, `PACKED`, `SHIPPED`, `DELIVERED`, `CANCELLED`, `RETURN_REQUESTED`, `RETURNED`, `REFUNDED`.
+Invalid transitions return 400 `BUSINESS_RULE_VIOLATION`.
+
+## Orders — `/api/v1`
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| GET | `/orders/my` | User | the caller's orders; optional `status` |
+| GET | `/orders/{id}` | Owner or `order:view_all` | with items, `allowedNextStatuses`, `canCancel` |
+| GET | `/orders/{id}/history` | Owner or `order:view` | status timeline |
+| POST | `/orders/{id}/cancel` | Owner (only while `PENDING_PAYMENT`) or `order:cancel` | optional `{ note }` |
+| GET | `/admin/orders` | `order:view_all` | filters `status`, `keyword`, `from`, `to` |
+| PATCH | `/admin/orders/{id}/status` | `order:update` (+ `order:cancel` for `CANCELLED`) | `{ newStatus, note? }` |
 
 ## Payments — `/api/payments` (Owner or Admin)
 
@@ -94,13 +106,13 @@ Payment is **simulated**; there is no gateway and no webhook.
 |---|---|---|
 | GET | `/order/{orderId}` | payment of the order |
 | PUT | `/order/{orderId}/method` | `{ method }` (the UI offers `COD`, `VIETQR`, `MOMO`, `VNPAY`); rejected once paid |
-| POST | `/order/{orderId}/pay` | always succeeds unless the order is cancelled; stores a fake `MOCK-<uuid>` transaction id and marks the order `PAID` |
+| POST | `/order/{orderId}/pay` | succeeds only for an order in `PENDING_PAYMENT` (rejected if cancelled or already past payment); stores a fake `MOCK-<uuid>` transaction id and moves the order to `PAID` through the order state machine |
 
 ## Returns — `/api/returns`
 
 | Method | Path | Access | Notes |
 |---|---|---|---|
-| POST | `/` | User | `{ orderId, reason, description?, imageUrl? }`; only for the caller's own **paid** order; one pending request per order |
+| POST | `/` | User | `{ orderId, reason, description?, imageUrl? }`; only for the caller's own order in `PAID` or `DELIVERED`; one pending request per order |
 | GET | `/my` | User | the caller's requests |
 | GET | `/` | Admin | all requests |
 | PUT | `/{id}/status` | Admin | `{ status, adminNote }` — `PENDING`, `APPROVED`, `REJECTED`; approving does not refund or restock |

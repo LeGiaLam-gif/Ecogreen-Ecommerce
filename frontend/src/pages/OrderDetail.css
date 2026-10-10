@@ -67,25 +67,16 @@
   font-weight: 700;
 }
 
-.od-status-tag.PENDING {
-  background: #fff8e1;
-  color: #f57f17;
-}
-
-.od-status-tag.CONFIRMED {
-  background: #e1f5fe;
-  color: #0277bd;
-}
-
-.od-status-tag.PAID {
-  background: #e8f5e9;
-  color: #2e7d32;
-}
-
-.od-status-tag.CANCELLED {
-  background: #ffebee;
-  color: #c62828;
-}
+.od-status-tag.PENDING_PAYMENT { background: #fef3c7; color: #b45309; }
+.od-status-tag.PAID { background: #dcfce7; color: #15803d; }
+.od-status-tag.PROCESSING { background: #e0f2fe; color: #0369a1; }
+.od-status-tag.PACKED { background: #ccfbf1; color: #0f766e; }
+.od-status-tag.SHIPPED { background: #ede9fe; color: #6d28d9; }
+.od-status-tag.DELIVERED { background: #bbf7d0; color: #166534; }
+.od-status-tag.CANCELLED { background: #fee2e2; color: #b91c1c; }
+.od-status-tag.RETURN_REQUESTED { background: #fef9c3; color: #a16207; }
+.od-status-tag.RETURNED,
+.od-status-tag.REFUNDED { background: #e2e8f0; color: #475569; }
 
 /* ---- Timeline ---- */
 .od-timeline {

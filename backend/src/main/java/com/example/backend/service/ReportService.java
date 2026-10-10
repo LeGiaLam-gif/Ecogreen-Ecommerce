@@ -1,6 +1,6 @@
 package com.example.backend.service;
 
-import com.example.backend.entity.Order;
+import com.example.backend.entity.OrderStatus;
 import com.example.backend.exception.BadRequestException;
 import com.example.backend.repository.OrderItemRepository;
 import com.example.backend.repository.OrderRepository;
@@ -20,12 +20,12 @@ import java.util.Map;
 
 /**
  * All revenue/report calculations for the admin "Sales Dashboard" (V6).
- * ASSUMPTION (documented per MASTER_PROMPT_V6 part 5): only orders with
- * status PAID count as revenue - this includes COD orders once the admin
- * has used "confirm COD payment" (OrderService.confirmCodPayment) and
- * MOCK_PAYMENT orders once "PAY NOW" succeeds (PaymentService.payNow).
- * CONFIRMED (COD, cash not yet collected) and PENDING/CANCELLED orders are
- * never counted as revenue - only as an order-status count.
+ * B05: an order counts as revenue when its status is in
+ * {@link OrderStatus#revenueStatuses()} (PAID, PROCESSING, PACKED, SHIPPED,
+ * DELIVERED, RETURN_REQUESTED) - the statuses whose money was collected or is
+ * accepted as cash on delivery. PENDING_PAYMENT, CANCELLED, RETURNED and
+ * REFUNDED orders are never revenue, only an order-status count. The set lives
+ * in the enum so a new status cannot silently drop out of the reports.
  */
 @Service
 public class ReportService {
@@ -91,7 +91,7 @@ public class ReportService {
         String groupBy = resolveGroupBy(r, groupByParam);
 
         if ("month".equals(groupBy)) {
-            List<Object[]> rows = orderRepository.sumRevenueByMonth(from);
+            List<Object[]> rows = orderRepository.sumRevenueByMonth(from, OrderStatus.revenueStatuses());
             Map<String, Object[]> byMonth = new LinkedHashMap<>();
             for (Object[] row : rows) {
                 String key = YearMonth.from(toLocalDate(row[0])).format(MONTH_FMT);
@@ -112,7 +112,7 @@ public class ReportService {
             }
             return result;
         } else {
-            List<Object[]> rows = orderRepository.sumRevenueByDay(from);
+            List<Object[]> rows = orderRepository.sumRevenueByDay(from, OrderStatus.revenueStatuses());
             Map<String, Object[]> byDay = new LinkedHashMap<>();
             for (Object[] row : rows) {
                 byDay.put(toLocalDate(row[0]).format(DAY_FMT), row);
@@ -140,11 +140,11 @@ public class ReportService {
 
     public Map<String, Long> getOrdersByStatus() {
         Map<String, Long> counts = new LinkedHashMap<>();
-        for (Order.Status status : Order.Status.values()) {
+        for (OrderStatus status : OrderStatus.values()) {
             counts.put(status.name(), 0L);
         }
         for (Object[] row : orderRepository.countAllByStatus()) {
-            Order.Status status = (Order.Status) row[0];
+            OrderStatus status = (OrderStatus) row[0];
             counts.put(status.name(), (Long) row[1]);
         }
         return counts;
@@ -156,7 +156,7 @@ public class ReportService {
 
     public List<Map<String, Object>> getTopProducts(int limit, String range) {
         LocalDateTime from = resolveFrom(range);
-        List<Object[]> rows = orderItemRepository.topSellingProductsSince(from);
+        List<Object[]> rows = orderItemRepository.topSellingProductsSince(from, OrderStatus.revenueStatuses());
         List<Map<String, Object>> result = new ArrayList<>();
         int count = Math.max(1, limit);
         for (Object[] row : rows) {
@@ -178,7 +178,7 @@ public class ReportService {
 
     public Map<String, Object> getSummary(String range) {
         LocalDateTime from = resolveFrom(range);
-        List<Object[]> rows = orderRepository.sumRevenueAndCountSince(from);
+        List<Object[]> rows = orderRepository.sumRevenueAndCountSince(from, OrderStatus.revenueStatuses());
         BigDecimal totalRevenue = BigDecimal.ZERO;
         long totalOrders = 0L;
         if (!rows.isEmpty()) {

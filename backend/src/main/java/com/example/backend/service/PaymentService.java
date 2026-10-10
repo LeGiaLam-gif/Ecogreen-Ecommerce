@@ -1,10 +1,10 @@
 package com.example.backend.service;
 
 import com.example.backend.entity.Order;
+import com.example.backend.entity.OrderStatus;
 import com.example.backend.entity.Payment;
 import com.example.backend.exception.BadRequestException;
 import com.example.backend.exception.ResourceNotFoundException;
-import com.example.backend.repository.OrderRepository;
 import com.example.backend.repository.PaymentRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -21,7 +21,7 @@ import java.util.UUID;
 public class PaymentService {
 
     @Autowired private PaymentRepository paymentRepository;
-    @Autowired private OrderRepository orderRepository;
+    @Autowired private OrderService orderService;
 
     public Payment getByOrderId(Long orderId) {
         return paymentRepository.findByOrderId(orderId)
@@ -37,19 +37,25 @@ public class PaymentService {
         Payment payment = getByOrderId(orderId);
         Order order = payment.getOrder();
 
-        if (order.getStatus() == Order.Status.CANCELLED) {
+        if (order.getStatus() == OrderStatus.CANCELLED) {
             throw new BadRequestException("Đơn hàng này đã bị hủy, không thể tiếp tục thanh toán.");
         }
         if (payment.getStatus() == Payment.Status.SUCCESS) {
             return payment; // already paid - idempotent
         }
 
+        // TEMPORARY-COMPAT(B05): only an order that is waiting for payment can be paid; B06 replaces this mock.
+        if (order.getStatus() != OrderStatus.PENDING_PAYMENT) {
+            throw new BadRequestException("Đơn hàng không ở trạng thái chờ thanh toán, không thể thanh toán.");
+        }
+
         payment.setStatus(Payment.Status.SUCCESS);
         payment.setTransactionId("MOCK-" + UUID.randomUUID());
         paymentRepository.save(payment);
 
-        order.setStatus(Order.Status.PAID);
-        orderRepository.save(order);
+        // The order status has exactly one writer. It re-validates under a row lock, so a concurrent cancel cannot be
+        // overwritten; if it refuses, this whole transaction (including the payment above) rolls back.
+        orderService.transitionStatus(orderId, OrderStatus.PAID, null, "Mock payment");
 
         return payment;
     }

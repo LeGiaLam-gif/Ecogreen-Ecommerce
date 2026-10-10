@@ -5,7 +5,9 @@ import {
   getAdminProducts, createProduct, updateProduct, deleteProduct, publishProduct,
 } from '../../services/productApi';
 import { getAllCategories, createCategory, updateCategory, deleteCategory } from '../../services/categoryApi';
-import { getAllOrders, updateOrderStatus } from '../../services/orderApi';
+import { listAdminOrders, changeOrderStatus } from '../../services/orderApi';
+import { getOrdersByStatus } from '../../services/reportApi';
+import { ORDER_STATUS, ORDER_STATUS_KEYS, orderStatusInfo } from '../../utils/orderStatus';
 import { getAllUsers, deleteUser } from '../../services/userApi';
 import { getAllReturns, updateReturnStatus } from '../../services/returnApi';
 import SalesDashboard from './SalesDashboard';
@@ -23,13 +25,13 @@ const STATUS_LABELS = {
   ACTIVE: 'Đang bán', DRAFT: 'Bản nháp', OUT_OF_STOCK: 'Hết hàng', INACTIVE: 'Ngừng bán', ARCHIVED: 'Lưu trữ',
 };
 const emptyCategory = { name: '', description: '' };
-
 const STATUS_MAP = {
   PENDING: { label: 'Chờ thanh toán', color: '#856404', bg: '#fff3cd' },
   CONFIRMED: { label: 'Đã xác nhận', color: '#004085', bg: '#cce5ff' },
   PAID: { label: 'Đã thanh toán', color: '#155724', bg: '#d4edda' },
   CANCELLED: { label: 'Đã hủy', color: '#721c24', bg: '#f8d7da' },
 };
+const ORDER_PAGE_SIZE = 20;
 
 /**
  * Admin CMS - Quản trị toàn diện hệ sinh thái thương mại điện tử EcoGreen.
@@ -47,12 +49,16 @@ const AdminDashboard = () => {
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [orders, setOrders] = useState([]);
+  const [orderMeta, setOrderMeta] = useState({ page: 0, totalPages: 1, totalElements: 0 });
+  const [orderPage, setOrderPage] = useState(0);
+  const [orderCounts, setOrderCounts] = useState({});
   const [users, setUsers] = useState([]);
   const [returns, setReturns] = useState([]);
 
   // Bộ lọc chuyên sâu cho từng trang
   const [searchTerm, setSearchTerm] = useState('');
   const [orderStatusFilter, setOrderStatusFilter] = useState('ALL');
+  const [orderKeyword, setOrderKeyword] = useState('');
   const [productCategoryFilter, setProductCategoryFilter] = useState('ALL');
   const [productStockFilter, setProductStockFilter] = useState('ALL');
   const [productStatusFilter, setProductStatusFilter] = useState('ALL');
@@ -75,7 +81,16 @@ const AdminDashboard = () => {
   useEffect(() => {
     loadData();
     // eslint-disable-next-line
-  }, [activeTab]);
+  }, [activeTab, orderPage, orderStatusFilter, orderKeyword]);
+
+  // Order search is done by the server; wait for the admin to stop typing before asking again.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setOrderPage(0);
+      setOrderKeyword(searchTerm.trim());
+    }, 350);
+    return () => clearTimeout(t);
+  }, [searchTerm]);
 
   const loadData = async () => {
     setLoading(true);
@@ -83,16 +98,20 @@ const AdminDashboard = () => {
     try {
       if (activeTab === 'dashboard') {
         // Tải đồng thời để tính các chỉ số vận hành và cảnh báo thời gian thực
-        const [p, c, o, r, u] = await Promise.all([
+        const [p, c, o, counts, r, u] = await Promise.all([
           getAdminProducts({ page: 0, size: DASHBOARD_PRODUCT_SIZE }),
           getAllCategories(),
-          getAllOrders(),
+          listAdminOrders({ page: 0, size: 5 }),
+          getOrdersByStatus(),
           getAllReturns(),
           getAllUsers(),
         ]);
+
         setProducts(p.items || []);
         setCategories(c);
-        setOrders(o);
+        setOrders(o.items);
+        setOrderMeta(o.meta);
+        setOrderCounts(counts);
         setReturns(r);
         setUsers(u);
       } else if (activeTab === 'products') {
@@ -101,7 +120,18 @@ const AdminDashboard = () => {
       } else if (activeTab === 'categories') {
         setCategories(await getAllCategories());
       } else if (activeTab === 'orders') {
-        setOrders(await getAllOrders());
+        const [o, counts] = await Promise.all([
+          listAdminOrders({
+            page: orderPage,
+            size: ORDER_PAGE_SIZE,
+            status: orderStatusFilter === 'ALL' ? undefined : orderStatusFilter,
+            keyword: orderKeyword || undefined,
+          }),
+          getOrdersByStatus(),
+        ]);
+        setOrders(o.items);
+        setOrderMeta(o.meta);
+        setOrderCounts(counts);
       } else if (activeTab === 'users') {
         setUsers(await getAllUsers());
       } else if (activeTab === 'returns') {
@@ -223,7 +253,7 @@ const AdminDashboard = () => {
   // --- Orders Handler ---
   const handleUpdateStatus = async (orderId, newStatus) => {
     try {
-      await updateOrderStatus(orderId, newStatus);
+      await changeOrderStatus(orderId, newStatus);
       loadData();
     } catch (e) {
       alert(e.friendlyMessage || 'Không thể cập nhật trạng thái đơn hàng.');
@@ -262,11 +292,11 @@ const AdminDashboard = () => {
   };
 
   // Tính toán nhanh các chỉ số vận hành cần xử lý (Action Items)
-  const pendingOrders = orders.filter(o => o.status === 'PENDING');
+  const pendingOrdersCount = orderCounts.PENDING_PAYMENT || 0;
   const pendingReturns = returns.filter(r => r.status === 'PENDING');
   // Dashboard alert: counted over the newest page of up to 100 products (see DASHBOARD_PRODUCT_SIZE).
   const lowStockProducts = products.filter(p => p.stockQuantity <= 10);
-  const recentOrders = [...orders].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 5);
+  const recentOrders = orders.slice(0, 5); // the server already returns newest first
 
   const tabLabels = {
     dashboard: '📊 Tổng quan hệ thống (Dashboard)',
@@ -343,8 +373,8 @@ const AdminDashboard = () => {
               className={`admin-nav-btn ${activeTab === tab.id ? 'admin-nav-btn-active' : ''}`}
             >
               {tab.label}
-              {tab.id === 'orders' && pendingOrders.length > 0 && (
-                <span className="admin-nav-badge-warn">{pendingOrders.length}</span>
+              {tab.id === 'orders' && pendingOrdersCount > 0 && (
+                <span className="admin-nav-badge-warn">{pendingOrdersCount}</span>
               )}
               {tab.id === 'returns' && pendingReturns.length > 0 && (
                 <span className="admin-nav-badge-warn">{pendingReturns.length}</span>
@@ -410,19 +440,19 @@ const AdminDashboard = () => {
                 {/* Action Alert Cards */}
                 <div className="admin-alert-cards-grid">
                   <div
-                    className={`admin-alert-card ${pendingOrders.length > 0 ? 'alert-warning' : 'alert-success'}`}
+                    className={`admin-alert-card ${pendingOrdersCount > 0 ? 'alert-warning' : 'alert-success'}`}
                     onClick={() => {
                       setActiveTab('orders');
-                      setOrderStatusFilter('PENDING');
+                      setOrderStatusFilter('PENDING_PAYMENT');
                     }}
                     title="Bấm để xem danh sách đơn hàng chờ duyệt"
                   >
                     <div className="alert-card-icon">⏳</div>
                     <div className="alert-card-content">
-                      <div className="alert-card-num">{pendingOrders.length}</div>
+                      <div className="alert-card-num">{pendingOrdersCount}</div>
                       <div className="alert-card-label">Đơn hàng chờ duyệt</div>
                       <div className="alert-card-desc">
-                        {pendingOrders.length > 0 ? 'Cần xác nhận và chuẩn bị hàng' : 'Không có đơn chờ duyệt'}
+                        {pendingOrdersCount > 0 ? 'Cần xác nhận và chuẩn bị hàng' : 'Không có đơn chờ duyệt'}
                       </div>
                     </div>
                     <div className="alert-card-arrow">→</div>
@@ -488,7 +518,7 @@ const AdminDashboard = () => {
                     className="admin-link-btn"
                     style={{ fontWeight: 600, color: '#2e7d32' }}
                   >
-                    Xem tất cả đơn hàng ({orders.length}) →
+                    Xem tất cả đơn hàng ({orderMeta.totalElements}) →
                   </button>
                 </div>
 
@@ -506,7 +536,7 @@ const AdminDashboard = () => {
                     </thead>
                     <tbody>
                       {recentOrders.map((o) => {
-                        const sInfo = STATUS_MAP[o.status] || { label: o.status, color: '#333', bg: '#f1f5f9' };
+                        const sInfo = orderStatusInfo(o.status);
                         return (
                           <tr key={o.id}>
                             <td className="admin-cell-strong">#{o.id}</td>
@@ -523,16 +553,20 @@ const AdminDashboard = () => {
                               </span>
                             </td>
                             <td style={{ textAlign: 'center' }}>
-                              <select
-                                value={o.status}
-                                onChange={(e) => handleUpdateStatus(o.id, e.target.value)}
-                                className="admin-status-select"
-                              >
-                                <option value="PENDING">Chờ thanh toán</option>
-                                <option value="CONFIRMED">Đã xác nhận</option>
-                                <option value="PAID">Đã thanh toán</option>
-                                <option value="CANCELLED">Đã hủy</option>
-                              </select>
+                              {(o.allowedNextStatuses || []).length === 0 ? (
+                                <span className="admin-cell-muted">—</span>
+                              ) : (
+                                <select
+                                  value=""
+                                  onChange={(e) => e.target.value && handleUpdateStatus(o.id, e.target.value)}
+                                  className="admin-status-select"
+                                >
+                                  <option value="">Chuyển sang…</option>
+                                  {o.allowedNextStatuses.map((st) => (
+                                    <option key={st} value={st}>{ORDER_STATUS[st]?.label || st}</option>
+                                  ))}
+                                </select>
+                              )}
                             </td>
                           </tr>
                         );
@@ -785,16 +819,13 @@ const AdminDashboard = () => {
               {/* Thanh lọc trạng thái nhanh dạng Pills */}
               <div className="admin-order-status-tabs">
                 {[
-                  { key: 'ALL', label: 'Tất cả đơn', count: orders.length },
-                  { key: 'PENDING', label: 'Chờ thanh toán', count: orders.filter(o => o.status === 'PENDING').length },
-                  { key: 'CONFIRMED', label: 'Đã xác nhận', count: orders.filter(o => o.status === 'CONFIRMED').length },
-                  { key: 'PAID', label: 'Đã thanh toán', count: orders.filter(o => o.status === 'PAID').length },
-                  { key: 'CANCELLED', label: 'Đã hủy', count: orders.filter(o => o.status === 'CANCELLED').length },
+                  { key: 'ALL', label: 'Tất cả đơn', count: Object.values(orderCounts).reduce((a, b) => a + b, 0) },
+                  ...ORDER_STATUS_KEYS.map((k) => ({ key: k, label: ORDER_STATUS[k].label, count: orderCounts[k] || 0 })),
                 ].map((item) => (
                   <button
                     key={item.key}
                     type="button"
-                    onClick={() => setOrderStatusFilter(item.key)}
+                    onClick={() => { setOrderPage(0); setOrderStatusFilter(item.key); }}
                     className={`admin-status-pill ${orderStatusFilter === item.key ? 'active' : ''}`}
                   >
                     {item.label} <span className="pill-count">({item.count})</span>
@@ -813,7 +844,7 @@ const AdminDashboard = () => {
                   style={{ width: '360px' }}
                 />
                 <div style={{ fontSize: '0.88rem', color: '#64748b' }}>
-                  Hiển thị <strong>{filteredOrders.length}</strong> đơn hàng
+                  Hiển thị <strong>{orders.length}</strong> / {orderMeta.totalElements} đơn hàng
                 </div>
               </div>
 
@@ -830,14 +861,14 @@ const AdminDashboard = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredOrders.map((o) => {
-                      const sInfo = STATUS_MAP[o.status] || { label: o.status, color: '#333', bg: '#f1f5f9' };
+                    {orders.map((o) => {
+                      const sInfo = orderStatusInfo(o.status);
                       return (
                         <tr key={o.id}>
                           <td className="admin-cell-strong">#{o.id}</td>
                           <td>
                             <div style={{ fontWeight: 600 }}>{o.customerName || 'Khách hàng'}</div>
-                            <small style={{ color: '#64748b' }}>{o.phone || ''}</small>
+                            <small style={{ color: '#64748b' }}>{o.customerPhone || ''}</small>
                           </td>
                           <td className="admin-cell-muted">
                             {new Date(o.createdAt).toLocaleString('vi-VN')}
@@ -851,24 +882,35 @@ const AdminDashboard = () => {
                             </span>
                           </td>
                           <td style={{ textAlign: 'center' }}>
-                            <select
-                              value={o.status}
-                              onChange={(e) => handleUpdateStatus(o.id, e.target.value)}
-                              className="admin-status-select"
-                            >
-                              <option value="PENDING">Chờ thanh toán (PENDING)</option>
-                              <option value="CONFIRMED">Đã xác nhận (CONFIRMED)</option>
-                              <option value="PAID">Đã thanh toán (PAID)</option>
-                              <option value="CANCELLED">Đã hủy (CANCELLED)</option>
-                            </select>
+                            {(o.allowedNextStatuses || []).length === 0 ? (
+                              <span className="admin-cell-muted">—</span>
+                            ) : (
+                              <select
+                                value=""
+                                onChange={(e) => e.target.value && handleUpdateStatus(o.id, e.target.value)}
+                                className="admin-status-select"
+                              >
+                                <option value="">Chuyển sang…</option>
+                                {o.allowedNextStatuses.map((st) => (
+                                  <option key={st} value={st}>{ORDER_STATUS[st]?.label || st}</option>
+                                ))}
+                              </select>
+                            )}
                           </td>
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
-                {filteredOrders.length === 0 && (
+                {orders.length === 0 && (
                   <div className="admin-empty">Không có đơn hàng nào trong trạng thái đã chọn.</div>
+                )}
+                {orderMeta.totalPages > 1 && (
+                  <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '14px', padding: '14px' }}>
+                    <button type="button" disabled={orderPage === 0} onClick={() => setOrderPage((x) => x - 1)}>← Trước</button>
+                    <span>Trang {orderPage + 1} / {orderMeta.totalPages}</span>
+                    <button type="button" disabled={orderPage + 1 >= orderMeta.totalPages} onClick={() => setOrderPage((x) => x + 1)}>Sau →</button>
+                  </div>
                 )}
               </div>
             </div>

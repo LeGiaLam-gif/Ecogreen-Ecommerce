@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { getRevenueOverTime, getOrdersByStatus, getTopProducts, getReportSummary } from '../../services/reportApi';
 import ErrorMessage from '../../components/ErrorMessage';
+import { ORDER_STATUS } from '../../utils/orderStatus';
 import './SalesDashboard.css';
 
 const RANGES = [
@@ -9,14 +10,10 @@ const RANGES = [
   { value: '12m', label: '12 tháng' },
 ];
 
-// Same 4 colors as the .status-badge text colors in index.css - kept in sync
-// on purpose (see MASTER_PROMPT_V6 2.3.d): PENDING/CONFIRMED/PAID/CANCELLED.
-const STATUS_COLORS = {
-  PENDING: '#9A6B00',
-  CONFIRMED: '#1D5FA8',
-  PAID: '#2E7D32',
-  CANCELLED: '#C0392B',
-};
+// One colour per order status (B05). Keep in sync with utils/orderStatus.js.
+const STATUS_COLORS = Object.fromEntries(
+  Object.entries(ORDER_STATUS).map(([key, info]) => [key, info.color]),
+);
 
 const formatVnd = (value) => `${Number(value || 0).toLocaleString('vi-VN')}₫`;
 
@@ -160,7 +157,7 @@ const SalesDashboard = () => {
   const [errorMsg, setErrorMsg] = useState('');
   const [summary, setSummary] = useState(null);
   const [revenueSeries, setRevenueSeries] = useState([]);
-  const [statusCounts, setStatusCounts] = useState({ PENDING: 0, CONFIRMED: 0, PAID: 0, CANCELLED: 0 });
+  const [statusCounts, setStatusCounts] = useState({});
   const [topProducts, setTopProducts] = useState([]);
 
   useEffect(() => {
