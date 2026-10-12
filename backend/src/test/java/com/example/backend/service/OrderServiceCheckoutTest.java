@@ -125,7 +125,7 @@ class OrderServiceCheckoutTest {
     void legacyCheckout_oneItemInsufficient_rollsBackOrderAndStock() {
         cartWithTwoProducts();
         // product 10 can be reserved, product 11 is sold out
-        doThrow(new InsufficientStockException(11L, 1)).when(f.inventory).reserve(11L, 1, "ORDER", 100L);
+        doThrow(new InsufficientStockException(11L, 1, "Túi vải")).when(f.inventory).reserve(11L, 1, "ORDER", 100L);
 
         assertThrows(InsufficientStockException.class,
                 () -> f.service.checkout(user, "An", "0900000000", "1 Le Loi", "COD"));

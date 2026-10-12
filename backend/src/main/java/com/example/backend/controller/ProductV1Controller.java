@@ -43,12 +43,14 @@ public class ProductV1Controller {
     @GetMapping("/{idOrSlug}")
     public ApiResponse<ProductResponse> get(@PathVariable String idOrSlug) {
         Product p = productService.getByIdOrSlug(idOrSlug, true);
-        return ApiResponse.of(ProductResponse.from(p, productService.loadImages(List.of(p)).get(p.getId())));
+        return ApiResponse.of(ProductResponse.from(p, productService.loadImages(List.of(p)).get(p.getId()),
+                productService.loadAvailability(List.of(p)).getOrDefault(p.getId(), 0)));
     }
 
-    /** One page of products + ONE images query for the whole page. */
+    /** One page of products + ONE images query and ONE availability query for the whole page. */
     static ApiResponse<List<ProductResponse>> toResponse(ProductService service, Page<Product> page) {
         Map<Long, List<ProductImage>> images = service.loadImages(page.getContent());
-        return PageResponse.of(page, p -> ProductResponse.from(p, images.get(p.getId())));
+        Map<Long, Integer> available = service.loadAvailability(page.getContent());
+        return PageResponse.of(page, p -> ProductResponse.from(p, images.get(p.getId()), available.getOrDefault(p.getId(), 0)));
     }
 }

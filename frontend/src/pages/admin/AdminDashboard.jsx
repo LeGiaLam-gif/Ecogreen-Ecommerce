@@ -73,6 +73,8 @@ const AdminDashboard = () => {
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
   const [currentProduct, setCurrentProduct] = useState(emptyProduct);
   const [isEditProduct, setIsEditProduct] = useState(false);
+  // B03: stockQuantity (= available) of the product as it was when the edit form opened; see handleProductSubmit.
+  const [loadedStock, setLoadedStock] = useState(null);
 
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
   const [currentCategory, setCurrentCategory] = useState(emptyCategory);
@@ -215,6 +217,11 @@ const AdminDashboard = () => {
         ...(hasCompare ? { comparePrice: Number(currentProduct.comparePrice) } : {}),
       };
       if (isEditProduct) {
+        // B03: stock is changed through the inventory. When editing, send stockQuantity only if the admin changed that
+        // input; otherwise a stale value would overwrite stock that customers reserved or released since the form opened.
+        if (Number(currentProduct.stockQuantity) === Number(loadedStock)) {
+          delete payload.stockQuantity;
+        }
         // PATCH: an emptied compare-price field must be cleared explicitly.
         await updateProduct(currentProduct.id, hasCompare ? payload : { ...payload, clearComparePrice: true });
       } else {
@@ -694,6 +701,7 @@ const AdminDashboard = () => {
                           <button
                             onClick={() => {
                               setIsEditProduct(true);
+                              setLoadedStock(p.stockQuantity);
                               setCurrentProduct({ ...p, categoryId: p.categoryId });
                               setIsProductModalOpen(true);
                             }}

@@ -1,8 +1,11 @@
 package com.example.backend.repository;
 
 import com.example.backend.dto.ProductSearchCriteria;
+import com.example.backend.entity.Inventory;
 import com.example.backend.entity.Product;
 import jakarta.persistence.criteria.Expression;
+import jakarta.persistence.criteria.Root;
+import jakarta.persistence.criteria.Subquery;
 import org.springframework.data.jpa.domain.Specification;
 
 import java.util.Locale;
@@ -52,7 +55,16 @@ public final class ProductSpecifications {
             spec = spec.and((root, query, cb) -> cb.lessThanOrEqualTo(root.<java.math.BigDecimal>get("price"), c.maxPrice()));
         }
         if (Boolean.TRUE.equals(c.inStock())) {
-            spec = spec.and((root, query, cb) -> cb.greaterThan(root.<Integer>get("stockQuantity"), 0));
+            // B03: in stock = available (on hand minus reserved) > 0 in the inventory, not the frozen products column.
+            spec = spec.and((root, query, cb) -> {
+                Subquery<Integer> available = query.subquery(Integer.class);
+                Root<Inventory> inventory = available.from(Inventory.class);
+                available.select(cb.literal(1)).where(
+                        cb.equal(inventory.get("productId"), root.get("id")),
+                        cb.greaterThan(cb.diff(inventory.<Integer>get("quantityOnHand"),
+                                inventory.<Integer>get("reservedQuantity")), 0));
+                return cb.exists(available);
+            });
         }
         return spec;
     }

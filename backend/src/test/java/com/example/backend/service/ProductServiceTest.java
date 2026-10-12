@@ -17,6 +17,7 @@ import jakarta.persistence.criteria.CriteriaQuery;
 import jakarta.persistence.criteria.Expression;
 import jakarta.persistence.criteria.Path;
 import jakarta.persistence.criteria.Root;
+import com.example.backend.service.inventory.InventoryService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -60,7 +61,10 @@ class ProductServiceTest {
     @Mock private ProductRepository productRepository;
     @Mock private ProductImageRepository productImageRepository;
     @Mock private CategoryService categoryService;
+    @Mock private InventoryService inventoryService;
     @InjectMocks private ProductService service;
+
+    private static final Long ACTOR = 9L;
 
     private Category category;
 
@@ -95,16 +99,16 @@ class ProductServiceTest {
 
     @Test
     void create_defaultsToActive() {
-        Product p = service.create(create("Bình giữ nhiệt", null));
+        Product p = service.create(create("Bình giữ nhiệt", null), ACTOR);
         assertEquals(Product.Status.ACTIVE, p.getStatus());
         assertEquals("binh-giu-nhiet", p.getSlug());
     }
 
     @Test
     void create_draftIsOptIn_andOtherStatusesAreRejected() {
-        assertEquals(Product.Status.DRAFT, service.create(create("Bình A", Product.Status.DRAFT)).getStatus());
+        assertEquals(Product.Status.DRAFT, service.create(create("Bình A", Product.Status.DRAFT), ACTOR).getStatus());
         for (Product.Status s : new Product.Status[]{Product.Status.INACTIVE, Product.Status.ARCHIVED, Product.Status.OUT_OF_STOCK}) {
-            assertThrows(BadRequestException.class, () -> service.create(create("Bình B", s)));
+            assertThrows(BadRequestException.class, () -> service.create(create("Bình B", s), ACTOR));
         }
     }
 
@@ -113,14 +117,14 @@ class ProductServiceTest {
         when(productRepository.existsBySlug("ao-thun-dep")).thenReturn(true);
         when(productRepository.existsBySlug("ao-thun-dep-2")).thenReturn(false);
 
-        Product p = service.create(create("Áo Thun Đẹp", null));
+        Product p = service.create(create("Áo Thun Đẹp", null), ACTOR);
 
         assertEquals("ao-thun-dep-2", p.getSlug());
     }
 
     @Test
     void slug_numericOnly_isRejectedOrPrefixed() {
-        Product p = service.create(create("12345", null));
+        Product p = service.create(create("12345", null), ACTOR);
         assertEquals("product-12345", p.getSlug());
     }
 
@@ -128,7 +132,7 @@ class ProductServiceTest {
     void create_comparePriceBelowPrice_isRejected() {
         ProductCreateRequest r = new ProductCreateRequest("Bình", null, new BigDecimal("100"), new BigDecimal("99"),
                 1, null, 5L, null, null, null);
-        assertThrows(BadRequestException.class, () -> service.create(r));
+        assertThrows(BadRequestException.class, () -> service.create(r, ACTOR));
         verify(productRepository, never()).saveAndFlush(any(Product.class));
     }
 
@@ -137,7 +141,7 @@ class ProductServiceTest {
         when(productRepository.existsBySku("SKU-1")).thenReturn(true);
         ProductCreateRequest r = new ProductCreateRequest("Bình", null, new BigDecimal("100"), null,
                 1, null, 5L, "SKU-1", null, null);
-        assertThrows(ConflictException.class, () -> service.create(r));
+        assertThrows(ConflictException.class, () -> service.create(r, ACTOR));
     }
 
     @Test
@@ -201,7 +205,7 @@ class ProductServiceTest {
         ProductUpdateRequest r = new ProductUpdateRequest(null, null, null, null, null, null, null, null, null, null,
                 Product.Status.ACTIVE);
 
-        assertThrows(BusinessRuleViolationException.class, () -> service.update(8L, r));
+        assertThrows(BusinessRuleViolationException.class, () -> service.update(8L, r, ACTOR));
         assertEquals(Product.Status.DRAFT, p.getStatus());
     }
 
@@ -210,10 +214,69 @@ class ProductServiceTest {
         Product p = product(10L, Product.Status.ACTIVE, "a.jpg");
         ProductUpdateRequest archive = new ProductUpdateRequest(null, null, null, null, null, null, null, null, null, null,
                 Product.Status.ARCHIVED);
-        assertEquals(Product.Status.ARCHIVED, service.update(10L, archive).getStatus());
+        assertEquals(Product.Status.ARCHIVED, service.update(10L, archive, ACTOR).getStatus());
 
         ProductUpdateRequest rename = new ProductUpdateRequest("Cốc tre", null, null, null, null, null, null, null, null, null, null);
-        assertEquals("coc-tre", service.update(10L, rename).getSlug());
+        assertEquals("coc-tre", service.update(10L, rename, ACTOR).getSlug());
+    }
+
+    // ── B03: stock goes through the inventory ────────────────────────────────
+
+    @Test
+    void create_initializesTheInventoryWithTheRequestedStock_andTheActor() {
+        service.create(create("Bình giữ nhiệt", null), ACTOR); // the helper requests stock 5
+
+        verify(inventoryService).initialize(any(), eq(5), eq(ACTOR));
+    }
+
+    @Test
+    void create_withoutStock_initializesWithZero() {
+        ProductCreateRequest r = new ProductCreateRequest("Bình C", "mô tả", new BigDecimal("100000"), null, null, null, 5L, null, null, null);
+
+        service.create(r, ACTOR);
+
+        verify(inventoryService).initialize(any(), eq(0), eq(ACTOR));
+    }
+
+    @Test
+    void update_withStock_adjustsThroughTheInventory_usingTheFormReason() {
+        product(20L, Product.Status.ACTIVE, "a.jpg");
+        ProductUpdateRequest r = new ProductUpdateRequest(null, null, null, null, null, 12, null, null, null, null, null);
+
+        service.update(20L, r, ACTOR);
+
+        verify(inventoryService).setAvailable(eq(20L), eq(12), eq("Admin product form"), eq(ACTOR));
+    }
+
+    @Test
+    void update_withoutStock_neverTouchesTheInventory() {
+        product(21L, Product.Status.ACTIVE, "a.jpg");
+        ProductUpdateRequest r = new ProductUpdateRequest("Cốc tre", null, null, null, null, null, null, null, null, null, null);
+
+        service.update(21L, r, ACTOR);
+
+        verify(inventoryService, never()).setAvailable(any(), org.mockito.ArgumentMatchers.anyInt(), anyString(), any());
+    }
+
+    @Test
+    void update_negativeStock_isRejected_andTheInventoryIsNotTouched() {
+        product(22L, Product.Status.ACTIVE, "a.jpg");
+        ProductUpdateRequest r = new ProductUpdateRequest(null, null, null, null, null, -1, null, null, null, null, null);
+
+        assertThrows(BadRequestException.class, () -> service.update(22L, r, ACTOR));
+        verify(inventoryService, never()).setAvailable(any(), org.mockito.ArgumentMatchers.anyInt(), anyString(), any());
+    }
+
+    @Test
+    void loadAvailability_isOneBatchedInventoryCall_forAllProducts() {
+        Product a = new Product();
+        a.setId(1L);
+        Product b = new Product();
+        b.setId(2L);
+        when(inventoryService.availableFor(List.of(1L, 2L))).thenReturn(Map.of(1L, 4, 2L, 0));
+
+        assertEquals(Map.of(1L, 4, 2L, 0), service.loadAvailability(List.of(a, b)));
+        verify(inventoryService, times(1)).availableFor(anyCollection());
     }
 
     // ── read side ────────────────────────────────────────────────────────────

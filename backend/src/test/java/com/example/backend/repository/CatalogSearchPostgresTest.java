@@ -2,6 +2,7 @@ package com.example.backend.repository;
 
 import com.example.backend.dto.ProductSearchCriteria;
 import com.example.backend.entity.Category;
+import com.example.backend.entity.Inventory;
 import com.example.backend.entity.Product;
 import com.example.backend.entity.ProductImage;
 import com.example.backend.service.ProductService;
@@ -53,6 +54,7 @@ class CatalogSearchPostgresTest {
     @Autowired private ProductRepository productRepository;
     @Autowired private ProductImageRepository productImageRepository;
     @Autowired private CategoryRepository categoryRepository;
+    @Autowired private InventoryRepository inventoryRepository;
     @Autowired private EntityManagerFactory entityManagerFactory;
 
     private final String tag = "t" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
@@ -63,6 +65,7 @@ class CatalogSearchPostgresTest {
     void cleanUp() {
         for (Product p : created) {
             productImageRepository.deleteAll(productImageRepository.findByProductIdOrderBySortOrderAscIdAsc(p.getId()));
+            inventoryRepository.deleteById(p.getId());
             productRepository.deleteById(p.getId());
         }
         if (category != null) categoryRepository.deleteById(category.getId());
@@ -79,10 +82,11 @@ class CatalogSearchPostgresTest {
         p.setName(tag + " " + name);
         p.setSlug(tag + "-" + created.size());
         p.setPrice(new BigDecimal(price));
-        p.setStockQuantity(stock);
         p.setCategory(category);
         p.setStatus(status);
         p = productRepository.save(p);
+        // B03: stock lives in the inventory (on hand 'stock', nothing reserved), not in the frozen products column
+        inventoryRepository.save(new Inventory(p.getId(), stock, 0));
         created.add(p);
         return p;
     }
@@ -142,16 +146,18 @@ class CatalogSearchPostgresTest {
         long few = statementsForPage(stats, 3);
         long many = statementsForPage(stats, 12);
 
-        // page query + count query + ONE images IN query, whatever the number of rows on the page
+        // page query + count query + ONE images IN query + ONE availability query, whatever the number of rows on the page
         assertEquals(few, many);
-        assertTrue(many <= 3, "statements for a 12-item list: " + many);
+        assertTrue(many <= 4, "statements for a 12-item list: " + many);
     }
 
     private long statementsForPage(Statistics stats, int size) {
         stats.clear();
         Page<Product> page = productService.search(tagged(null, null, null, null), ProductService.toPageable(0, size, null));
         Map<Long, List<ProductImage>> images = productService.loadImages(page.getContent());
+        Map<Long, Integer> available = productService.loadAvailability(page.getContent());
         page.getContent().forEach(p -> {
+            available.get(p.getId());
             p.getCategory().getName();           // would be an N+1 if the category were not fetched with the page
             images.get(p.getId());
         });

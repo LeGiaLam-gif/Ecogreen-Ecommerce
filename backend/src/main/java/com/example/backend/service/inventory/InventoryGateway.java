@@ -1,12 +1,12 @@
 package com.example.backend.service.inventory;
 
 /**
- * Port through which the order module changes stock. B05 owns this interface; B03 (Inventory) supplies the real
- * reservation model and removes {@link LegacyStockInventoryGateway}.
+ * Port through which the order module changes stock. B05 owns this interface; {@link InventoryService} (B03) is its only
+ * implementation and provides the reservation model (on hand / reserved) and the ledger.
  *
  * <p>All mutating methods must run inside the caller's transaction, so an order and its stock movements commit or roll
  * back together. {@code refType} and {@code refId} identify what caused the movement (for example {@code "ORDER"} and the
- * order id); the legacy adapter ignores them, B03 will record them.
+ * order id); InventoryService records them in the ledger and uses them to ignore a replay.
  */
 public interface InventoryGateway {
 

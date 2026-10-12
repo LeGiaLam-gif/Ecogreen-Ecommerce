@@ -50,7 +50,7 @@ over `products.stock_quantity` (atomic `UPDATE ... WHERE stock_quantity >= ?`, p
 | `PAID` / `PROCESSING` → `CANCELLED` | restock (never release) |
 | anything else | none |
 
-Insufficient stock → `InsufficientStockException` (409 `CONFLICT`).
+Insufficient stock → `InsufficientStockException` (400 `BUSINESS_RULE_VIOLATION`, message names the product; changed from 409 `CONFLICT` by B03).
 
 ## 4. Endpoints (`/api/v1`)
 

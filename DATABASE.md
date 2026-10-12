@@ -16,10 +16,12 @@ PostgreSQL 16, database `ecogreen`. This document describes the schema that exis
 | `…/V10` | `products`: `slug`, `compare_price`, `sku`, `brand`, 5-value status CHECK, list indexes |
 | `…/V11` | `product_images` (+ copy of the legacy `products.image`) |
 | `…/V12` | `categories`: `parent_id` (tree) and `slug` |
+| `…/V30` | `inventory` (on hand / reserved, CHECKs) — **converts** `products.stock_quantity` + the stock held by unpaid orders |
+| `…/V31` | `inventory_transactions` (stock ledger, unique partial idempotency index) + one opening row per product |
 | `DataLoader` (at startup) | makes sure the roles `CUSTOMER`, `MANAGER`, `ADMIN` exist |
 | Hibernate `ddl-auto=update` | creates missing tables/columns from the JPA entities in development |
 
-Flyway is **not** active: the `V*.sql` files are applied by hand with `psql`, in numeric order, and are idempotent. Load `database/seed-data.sql` **before** V10/V12 (the seed does not set the new NOT NULL `slug`). Keep each entity
+Flyway is **not** active: the `V*.sql` files are applied by hand with `psql`, in numeric order, and are idempotent. Load `database/seed-data.sql` **before** V10/V12 (the seed does not set the new NOT NULL `slug`). Apply **V30 then V31 with the application stopped and before its first start with B03 code**: the entities map `product_id` as a plain column, so `ddl-auto=update` alone would create the inventory tables without their foreign keys, CHECKs and the unique partial index. Keep each entity
 and its SQL consistent (see `CLAUDE.md`).
 
 ## Relationships
@@ -32,6 +34,8 @@ roles ─┬─< user_roles >─┬─ users ─┬─< refresh_tokens
                         │         │           ├─< payments
                         │         │           └─< return_requests
                         │         └─< return_requests
+
+products ── inventory (1:1, ON DELETE CASCADE)   products ─< inventory_transactions (RESTRICT) >─ users (actor, SET NULL)
 ```
 
 ## Tables
@@ -60,6 +64,13 @@ roles ─┬─< user_roles >─┬─ users ─┬─< refresh_tokens
 | `carts` | one per user (`user_id` unique, `ON DELETE CASCADE`) |
 | `cart_items` | `cart_id`, `product_id`, `quantity` (> 0); unique `(cart_id, product_id)`. Name and price are always read from `products`, not copied |
 
+### Inventory (B03)
+
+| Table | Columns (key points) |
+|---|---|
+| `inventory` | `product_id` (PK, → `products`, `ON DELETE CASCADE`), `quantity_on_hand` (≥ 0), `reserved_quantity` (≥ 0 and ≤ on hand), `updated_at`. Available = on hand − reserved, never stored |
+| `inventory_transactions` | append-only ledger: `product_id` (→ `products`, RESTRICT), `change_type` (`RESERVE`, `RELEASE`, `COMMIT`, `RESTOCK`, `ADJUST`), `quantity` (positive; signed delta for `ADJUST`), `on_hand_after`, `reserved_after`, `reference_type` + `reference_id` (both or neither), `reason`, `actor_user_id` (→ `users`, `ON DELETE SET NULL`), `created_at`. Unique partial index on `(product_id, change_type, reference_type, reference_id)` for everything except `ADJUST` makes a replayed movement a no-op. Reconcile with the `*_after` columns of the last row, not by summing quantities |
+
 ### Orders, payments and returns
 
 | Table | Columns (key points) |
@@ -72,11 +83,13 @@ roles ─┬─< user_roles >─┬─ users ─┬─< refresh_tokens
 
 ## Behaviour worth knowing
 
-- **Stock:** `products.stock_quantity` is decremented when an order is created. Nothing restores it on cancellation or an approved return.
+- **Stock:** lives in `inventory` (on hand / reserved) with a ledger; an order reserves stock, payment commits it, cancellation releases or restocks it (B05 state machine). `products.stock_quantity` is **frozen** (never read or written; removal planned in B13) — any script or report that still reads it is stale. Nothing restores stock for an approved return yet (B07). Orders cancelled before B05's cutover were never restocked; V30 has a read-only diagnostic for them.
 - **Order status** changes are not validated and there is no status-history table.
 - **Time zone:** the connection URL in `application.properties` sets the session time zone to `Asia/Ho_Chi_Minh`.
 - **Demo data:** `init-postgres.sql` seeds roles only. `database/seed-data.sql` is optional demo data and **deletes** existing
-  orders, payments, cart items, products and categories before inserting (5 categories, 8 products, 2 demo users).
+  orders, payments, cart items, products and categories before inserting (5 categories, 8 products, 2 demo users). When the B03 tables
+  exist it also clears the ledger and inventory first and creates one inventory row (and a `Seed data` ledger row) per product;
+  when they do not exist yet it skips that, and V30/V31 convert the stock later.
   `database/recycled_products.xlsx` is the source of the demo products.
 
 ## Verification queries (read-only)

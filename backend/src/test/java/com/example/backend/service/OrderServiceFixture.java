@@ -80,7 +80,6 @@ final class OrderServiceFixture {
         product.setId(id);
         product.setName(name);
         product.setPrice(new BigDecimal(price));
-        product.setStockQuantity(100);
         product.setStatus(Product.Status.ACTIVE);
         return product;
     }

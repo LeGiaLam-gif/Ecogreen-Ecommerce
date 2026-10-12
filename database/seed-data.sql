@@ -38,6 +38,17 @@ DELETE FROM cart_items;
 DELETE FROM order_items;
 DELETE FROM payments;
 DELETE FROM orders;
+-- B03: stock lives in inventory; the ledger references products (RESTRICT), so clear it first. Only when those tables exist
+-- (this script is documented to run BEFORE V10..V31, when they do not exist yet).
+DO $$
+BEGIN
+    IF to_regclass('inventory_transactions') IS NOT NULL THEN
+        DELETE FROM inventory_transactions;
+    END IF;
+    IF to_regclass('inventory') IS NOT NULL THEN
+        DELETE FROM inventory;
+    END IF;
+END $$;
 DELETE FROM products;
 DELETE FROM categories;
 
@@ -99,3 +110,22 @@ INSERT INTO products (category_id, name, description, price, stock_quantity, ima
 
 -- Đồng bộ lại sequence products
 SELECT setval('products_id_seq', (SELECT MAX(id) FROM products));
+
+-- 8. B03: nếu bảng tồn kho đã tồn tại (V30/V31 đã chạy hoặc ứng dụng B03 đã khởi động), mỗi sản phẩm mẫu có một dòng tồn kho
+--    (on hand = stock_quantity, chưa giữ chỗ) để có thể bán, và một dòng sổ cái 'Seed data' giải thích số lượng đó. Nếu chưa có
+--    bảng (script này được chạy TRƯỚC V10..V31), bỏ qua: V30/V31 sẽ chuyển stock_quantity thành tồn kho sau đó. Chạy lại an toàn.
+DO $$
+BEGIN
+    IF to_regclass('inventory') IS NOT NULL AND to_regclass('inventory_transactions') IS NOT NULL THEN
+        INSERT INTO inventory (product_id, quantity_on_hand, reserved_quantity)
+        SELECT p.id, p.stock_quantity, 0 FROM products p
+        ON CONFLICT (product_id) DO NOTHING;
+
+        INSERT INTO inventory_transactions (product_id, change_type, quantity, on_hand_after, reserved_after, reason)
+        SELECT i.product_id,
+               CASE WHEN i.quantity_on_hand > 0 THEN 'RESTOCK' ELSE 'ADJUST' END,
+               i.quantity_on_hand, i.quantity_on_hand, i.reserved_quantity, 'Seed data'
+        FROM inventory i
+        WHERE NOT EXISTS (SELECT 1 FROM inventory_transactions t WHERE t.product_id = i.product_id);
+    END IF;
+END $$;

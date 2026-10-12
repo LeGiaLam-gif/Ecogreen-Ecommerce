@@ -9,6 +9,8 @@ import com.example.backend.entity.Product;
 import com.example.backend.entity.ProductImage;
 import com.example.backend.exception.BadRequestException;
 import com.example.backend.security.AuthGuard;
+import com.example.backend.security.AuthInterceptor;
+import com.example.backend.security.CurrentUser;
 import com.example.backend.security.Permissions;
 import com.example.backend.service.ProductImageService;
 import com.example.backend.service.ProductService;
@@ -54,14 +56,14 @@ public class AdminProductV1Controller {
     public ResponseEntity<ApiResponse<ProductResponse>> create(@Valid @RequestBody ProductCreateRequest body,
                                                                HttpServletRequest request) {
         authGuard.requirePermission(request, Permissions.PRODUCT_CREATE);
-        return ResponseEntity.status(201).body(ApiResponse.of(detail(productService.create(body))));
+        return ResponseEntity.status(201).body(ApiResponse.of(detail(productService.create(body, actorId(request)))));
     }
 
     @PatchMapping("/{id}")
     public ApiResponse<ProductResponse> update(@PathVariable Long id, @Valid @RequestBody ProductUpdateRequest body,
                                                HttpServletRequest request) {
         authGuard.requirePermission(request, Permissions.PRODUCT_UPDATE);
-        return ApiResponse.of(detail(productService.update(id, body)));
+        return ApiResponse.of(detail(productService.update(id, body, actorId(request))));
     }
 
     @PostMapping("/{id}/publish")
@@ -99,7 +101,14 @@ public class AdminProductV1Controller {
         return ResponseEntity.noContent().build();
     }
 
+    /** The authenticated admin's id for the stock ledger; read from the request attribute the interceptor already set. */
+    private static Long actorId(HttpServletRequest request) {
+        CurrentUser current = (CurrentUser) request.getAttribute(AuthInterceptor.REQUEST_ATTR);
+        return current == null ? null : current.getUserId();
+    }
+
     private ProductResponse detail(Product p) {
-        return ProductResponse.from(p, productService.loadImages(List.of(p)).get(p.getId()));
+        return ProductResponse.from(p, productService.loadImages(List.of(p)).get(p.getId()),
+                productService.loadAvailability(List.of(p)).getOrDefault(p.getId(), 0));
     }
 }

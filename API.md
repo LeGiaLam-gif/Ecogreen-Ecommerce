@@ -64,14 +64,27 @@ The legacy `/api/products` and `/api/categories` endpoints were removed.
 | DELETE | `/admin/categories/{id}` | `category:delete` | 409 while it has products or child categories |
 | GET | `/files/{key}` | Public | uploaded image (binary, `nosniff`) |
 
+`stockQuantity` is the **available** quantity (on hand minus reserved, from the inventory); `inStock=true` means available > 0.
 Product fields: `id, categoryId, categoryName, name, slug, description, price, comparePrice, stockQuantity, sku, brand, status, image (legacy: first image URL), images[{id,url,altText,sortOrder}]`.
+
+## Inventory — `/api/v1/admin/inventory` (B03)
+
+Contract: [`docs/ai/contracts/B03-inventory.md`](./docs/ai/contracts/B03-inventory.md). Stock is on hand / reserved; available = on hand − reserved.
+`quantityOnHand` and `reservedQuantity` appear only here, never in a public, cart or order response.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| GET | `/` | `inventory:view` | Query: `keyword` (name or SKU), `lowStock` (true keeps available ≤ `threshold`), `threshold` (default 10), `page`, `size` (default 20, max 100). Fixed order: available ascending, name, id |
+| GET | `/{productId}` | `inventory:view` | `{ productId, productName, sku, quantityOnHand, reservedQuantity, available, updatedAt }`; 404 without an inventory row |
+| GET | `/{productId}/transactions` | `inventory:view` | the stock ledger, newest first |
+| PATCH | `/{productId}/adjust` | `inventory:adjust` | `{ quantityDelta, reason }` (reason required, ≤ 255); delta 0 or a result below the reserved quantity → 400 |
 
 ## Cart — `/api/cart` (User; always the caller's own cart)
 
 | Method | Path | Body |
 |---|---|---|
 | GET | `/` | → `{ cartId, items[], totalPrice, totalItems }` |
-| POST | `/items` | `{ productId, quantity? }` (default 1); stock is checked on the server |
+| POST | `/items` | `{ productId, quantity? }` (default 1); the quantity is checked against the available stock on the server (400 "Kho chỉ còn N sản phẩm.") |
 | PUT | `/items/{id}` | `{ quantity }` |
 | DELETE | `/items/{id}` | |
 | DELETE | `/` | empties the cart |
@@ -85,7 +98,7 @@ Product fields: `id, categoryId, categoryName, name, slug, description, price, c
 Reading and changing orders is on `/api/v1` (envelope `{data, meta}`, paging `page`/`size`/`sort`). Contract: [`docs/ai/contracts/B05-order.md`](./docs/ai/contracts/B05-order.md).
 
 Statuses: `PENDING_PAYMENT`, `PAID`, `PROCESSING`, `PACKED`, `SHIPPED`, `DELIVERED`, `CANCELLED`, `RETURN_REQUESTED`, `RETURNED`, `REFUNDED`.
-Invalid transitions return 400 `BUSINESS_RULE_VIOLATION`.
+Invalid transitions return 400 `BUSINESS_RULE_VIOLATION`. Insufficient stock when an order is created also returns 400 `BUSINESS_RULE_VIOLATION` (since B03; it was 409), with a message that names the product.
 
 ## Orders — `/api/v1`
 

@@ -72,6 +72,15 @@ const Cart = () => {
                                     <h3 className="cart-item-name">{item.product.name}</h3>
                                     <p className="cart-item-price">{Number(item.product.price).toLocaleString('vi-VN')} ₫</p>
 
+                                    {/* B03: stockQuantity is the AVAILABLE quantity from the server; show when it fell below the cart quantity */}
+                                    {item.quantity > item.product.stockQuantity && (
+                                        <p style={{ color: '#c62828', margin: '4px 0' }}>
+                                            {item.product.stockQuantity > 0
+                                                ? `Kho chỉ còn ${item.product.stockQuantity} sản phẩm — vui lòng giảm số lượng trước khi đặt hàng.`
+                                                : 'Sản phẩm này hiện đã hết hàng.'}
+                                        </p>
+                                    )}
+
                                     <div className="cart-item-actions">
                                         <div className="quantity-controls">
                                             <button

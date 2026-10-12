@@ -92,8 +92,8 @@ class CatalogControllersSecurityTest {
 
         when(productService.searchAdmin(any(), any(Pageable.class))).thenReturn(new PageImpl<>(List.of(product)));
         when(productService.search(any(), any(Pageable.class))).thenReturn(new PageImpl<>(List.of(product)));
-        when(productService.create(any(ProductCreateRequest.class))).thenReturn(product);
-        when(productService.update(eq(7L), any(ProductUpdateRequest.class))).thenReturn(product);
+        when(productService.create(any(ProductCreateRequest.class), any())).thenReturn(product);
+        when(productService.update(eq(7L), any(ProductUpdateRequest.class), any())).thenReturn(product);
         when(productService.publish(7L)).thenReturn(product);
         when(productService.getByIdOrSlug("binh-giu-nhiet", true)).thenReturn(product);
         when(productImageService.upload(eq(7L), any(byte[].class), any())).thenReturn(image);
@@ -170,7 +170,7 @@ class CatalogControllersSecurityTest {
             int status = mvc.perform(as(e.request().get(), List.of(Permissions.ORDER_VIEW))).andReturn().getResponse().getStatus();
             assertEquals(403, status, e.name());
         }
-        verify(productService, never()).create(any(ProductCreateRequest.class));
+        verify(productService, never()).create(any(ProductCreateRequest.class), any());
         verify(productService, never()).publish(any());
         verify(productService, never()).delete(any());
         verify(categoryService, never()).delete(any());
@@ -242,7 +242,7 @@ class CatalogControllersSecurityTest {
                     List.of(Permissions.PRODUCT_CREATE))).andReturn().getResponse().getStatus();
             assertEquals(400, status, body);
         }
-        verify(productService, never()).create(any(ProductCreateRequest.class));
+        verify(productService, never()).create(any(ProductCreateRequest.class), any());
     }
 
     @Test

@@ -30,7 +30,7 @@ public class CartController {
         User user = authGuard.requireUser(request);
         var cart = cartService.getOrCreateCart(user);
         List<CartItem> items = cartService.getItems(user.getId());
-        return CartResponse.from(cart.getId(), items);
+        return CartResponse.from(cart.getId(), items, cartService.availabilityFor(items));
     }
 
     @PostMapping("/items")
@@ -39,7 +39,7 @@ public class CartController {
         Long productId = Long.parseLong(body.get("productId").toString());
         int quantity = body.containsKey("quantity") ? Integer.parseInt(body.get("quantity").toString()) : 1;
         List<CartItem> items = cartService.addItem(user, productId, quantity);
-        return CartResponse.from(cartService.getCartId(user.getId()), items);
+        return CartResponse.from(cartService.getCartId(user.getId()), items, cartService.availabilityFor(items));
     }
 
     @PutMapping("/items/{id}")
@@ -47,14 +47,14 @@ public class CartController {
         User user = authGuard.requireUser(request);
         int quantity = Integer.parseInt(body.get("quantity").toString());
         List<CartItem> items = cartService.updateQuantity(user, id, quantity);
-        return CartResponse.from(cartService.getCartId(user.getId()), items);
+        return CartResponse.from(cartService.getCartId(user.getId()), items, cartService.availabilityFor(items));
     }
 
     @DeleteMapping("/items/{id}")
     public CartResponse removeItem(@PathVariable Long id, HttpServletRequest request) {
         User user = authGuard.requireUser(request);
         List<CartItem> items = cartService.removeItem(user, id);
-        return CartResponse.from(cartService.getCartId(user.getId()), items);
+        return CartResponse.from(cartService.getCartId(user.getId()), items, cartService.availabilityFor(items));
     }
 
     @DeleteMapping

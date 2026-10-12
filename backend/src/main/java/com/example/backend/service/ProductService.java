@@ -14,6 +14,7 @@ import com.example.backend.exception.ResourceNotFoundException;
 import com.example.backend.repository.ProductImageRepository;
 import com.example.backend.repository.ProductRepository;
 import com.example.backend.repository.ProductSpecifications;
+import com.example.backend.service.inventory.InventoryService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
@@ -21,6 +22,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -41,6 +43,7 @@ public class ProductService {
     @Autowired private ProductRepository productRepository;
     @Autowired private ProductImageRepository productImageRepository;
     @Autowired private CategoryService categoryService;
+    @Autowired private InventoryService inventoryService;
 
     // ── B02 read side ────────────────────────────────────────────────────────
 
@@ -97,9 +100,22 @@ public class ProductService {
         return byProduct;
     }
 
+    /**
+     * Sellable quantity (on hand minus reserved) for these products with ONE query; every product id is present in the
+     * result (a product without an inventory row maps to 0). This is what the public {@code stockQuantity} means.
+     */
+    public Map<Long, Integer> loadAvailability(Collection<Product> products) {
+        return inventoryService.availableFor(products.stream().map(Product::getId).toList());
+    }
+
     // ── B02 write side ───────────────────────────────────────────────────────
 
-    public Product create(ProductCreateRequest r) {
+    /**
+     * Creates the product and its inventory row (initial stock becomes a ledger RESTOCK "Initial stock") in ONE transaction,
+     * so a product can never exist without its inventory row. {@code actorUserId} is the admin who made the request.
+     */
+    @Transactional
+    public Product create(ProductCreateRequest r, Long actorUserId) {
         String name = r.name() == null ? "" : r.name().trim();
         validate(name, r.price(), r.stockQuantity() == null ? 0 : r.stockQuantity(), r.categoryId());
         checkComparePrice(r.comparePrice(), r.price());
@@ -118,18 +134,20 @@ public class ProductService {
         p.setDescription(r.description());
         p.setPrice(r.price());
         p.setComparePrice(r.comparePrice());
-        p.setStockQuantity(r.stockQuantity() == null ? 0 : r.stockQuantity());
         p.setImage(blankToNull(r.image()));
         p.setCategory(category);
         p.setSku(sku);
         p.setBrand(blankToNull(r.brand()));
         p.setStatus(status);
         p.setSlug(uniqueSlug(name, null));
-        return saveChecked(p);
+        Product saved = saveChecked(p);
+        inventoryService.initialize(saved.getId(), r.stockQuantity() == null ? 0 : r.stockQuantity(), actorUserId);
+        return saved;
     }
 
-    /** Partial update (PATCH). */
-    public Product update(Long id, ProductUpdateRequest r) {
+    /** Partial update (PATCH). Runs in one transaction so a stock change and the product fields commit together. */
+    @Transactional
+    public Product update(Long id, ProductUpdateRequest r, Long actorUserId) {
         Product p = getByIdOrSlug(String.valueOf(id), false);
 
         if (r.name() != null) {
@@ -142,9 +160,8 @@ public class ProductService {
         }
         if (r.description() != null) p.setDescription(r.description());
         if (r.price() != null) p.setPrice(r.price());
-        if (r.stockQuantity() != null) {
-            if (r.stockQuantity() < 0) throw new BadRequestException("Số lượng tồn kho không được âm.");
-            p.setStockQuantity(r.stockQuantity());
+        if (r.stockQuantity() != null && r.stockQuantity() < 0) {
+            throw new BadRequestException("Số lượng tồn kho không được âm.");
         }
         if (r.image() != null) p.setImage(blankToNull(r.image()));
         if (r.categoryId() != null) p.setCategory(categoryService.getById(r.categoryId()));
@@ -169,7 +186,14 @@ public class ProductService {
             }
             p.setStatus(r.status());
         }
-        return saveChecked(p);
+        Product saved = saveChecked(p);
+        if (r.stockQuantity() != null) {
+            // TEMPORARY-COMPAT(B03): the admin product form still sends stockQuantity (= the AVAILABLE quantity it showed).
+            // InventoryService compares it with the LOCKED available value and adjusts by the difference; equal = no change,
+            // no ledger row. Removal condition: B12 (the inventory page replaces the stock input of the product form).
+            inventoryService.setAvailable(saved.getId(), r.stockQuantity(), "Admin product form", actorUserId);
+        }
+        return saved;
     }
 
     /** DRAFT / INACTIVE -> ACTIVE. Requires name, price > 0, a category and at least one image (a legacy image counts). */

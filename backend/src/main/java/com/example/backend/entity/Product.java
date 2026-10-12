@@ -49,7 +49,15 @@ public class Product {
     @Column(name = "compare_price", precision = 12, scale = 2)
     private BigDecimal comparePrice;
 
-    @Column(name = "stock_quantity", nullable = false)
+    /**
+     * FROZEN since B03: the stock now lives in {@code inventory} (on hand / reserved) and nothing reads or writes this column.
+     * It is kept (never dropped in the release that stops using it) as a historical value, and {@code updatable = false}
+     * makes sure no code can change it; a new row still inserts 0 (primitive int, and the column has DEFAULT 0).
+     * Removal condition: B13, after the owner confirms no script or report reads it.
+     */
+    @Deprecated
+    @SuppressWarnings("unused")
+    @Column(name = "stock_quantity", nullable = false, updatable = false)
     private int stockQuantity;
 
     /**
@@ -95,9 +103,6 @@ public class Product {
 
     public BigDecimal getPrice() { return price; }
     public void setPrice(BigDecimal price) { this.price = price; }
-
-    public int getStockQuantity() { return stockQuantity; }
-    public void setStockQuantity(int stockQuantity) { this.stockQuantity = stockQuantity; }
 
     @Deprecated
     public String getImage() { return image; }

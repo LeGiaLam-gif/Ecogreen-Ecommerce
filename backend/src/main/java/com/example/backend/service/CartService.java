@@ -8,11 +8,13 @@ import com.example.backend.exception.BadRequestException;
 import com.example.backend.exception.ResourceNotFoundException;
 import com.example.backend.repository.CartItemRepository;
 import com.example.backend.repository.CartRepository;
+import com.example.backend.service.inventory.InventoryService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -25,6 +27,7 @@ public class CartService {
     @Autowired private CartRepository cartRepository;
     @Autowired private CartItemRepository cartItemRepository;
     @Autowired private ProductService productService;
+    @Autowired private InventoryService inventoryService;
 
     @Transactional
     public Cart createCartForUser(User user) {
@@ -41,6 +44,11 @@ public class CartService {
         Cart cart = cartRepository.findByUserId(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Không tìm thấy giỏ hàng của người dùng #" + userId));
         return cartItemRepository.findByCartId(cart.getId());
+    }
+
+    /** Sellable quantity of every product in these cart items with ONE query (see ProductService.loadAvailability). */
+    public Map<Long, Integer> availabilityFor(List<CartItem> items) {
+        return inventoryService.availableFor(items.stream().map(i -> i.getProduct().getId()).toList());
     }
 
     public Long getCartId(Long userId) {
@@ -62,8 +70,9 @@ public class CartService {
         Optional<CartItem> existing = cartItemRepository.findByCartIdAndProductId(cart.getId(), productId);
 
         int newQuantity = quantity + existing.map(CartItem::getQuantity).orElse(0);
-        if (newQuantity > product.getStockQuantity()) {
-            throw new BadRequestException("Kho chỉ còn " + product.getStockQuantity() + " sản phẩm.");
+        int available = inventoryService.available(product.getId());
+        if (newQuantity > available) {
+            throw new BadRequestException("Kho chỉ còn " + available + " sản phẩm.");
         }
 
         CartItem item = existing.orElseGet(() -> {
@@ -86,8 +95,9 @@ public class CartService {
                 .orElseThrow(() -> new ResourceNotFoundException("Không tìm thấy sản phẩm trong giỏ hàng #" + cartItemId));
         ensureOwnership(user, item);
 
-        if (quantity > item.getProduct().getStockQuantity()) {
-            throw new BadRequestException("Kho chỉ còn " + item.getProduct().getStockQuantity() + " sản phẩm.");
+        int available = inventoryService.available(item.getProduct().getId());
+        if (quantity > available) {
+            throw new BadRequestException("Kho chỉ còn " + available + " sản phẩm.");
         }
         item.setQuantity(quantity);
         cartItemRepository.save(item);

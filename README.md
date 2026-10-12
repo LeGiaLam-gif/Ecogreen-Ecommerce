@@ -43,7 +43,7 @@ the database), but today every admin endpoint and the admin UI still require the
 
 ### What is not included
 
-Real payment gateway and webhooks, inventory reservation, discounts and shipping cost,
+Real payment gateway and webhooks, discounts and shipping cost,
 saved addresses, notifications,
 analytics events, audit log, Docker images for the app, CI pipeline, frontend tests. The planned work is described in
 [`docs/ai/MODULE_SPECS.md`](./docs/ai/MODULE_SPECS.md).
@@ -63,7 +63,7 @@ Spring Boot REST API (:8081) ──► PostgreSQL
 3. The backend decides what each caller may do (roles and permissions come from the token, ownership is checked per order);
    the frontend only hides buttons.
 4. Checkout is one database transaction: validate stock → create the order (`PENDING_PAYMENT`) with a snapshot of the current
-   prices → deduct stock → record the first status-history row → create a pending payment → empty the cart. Afterwards every
+   prices → reserve stock → record the first status-history row → create a pending payment → empty the cart. Afterwards every
    status change goes through one validated state machine.
 
 ## Technology stack
@@ -161,10 +161,12 @@ for f in $(ls backend/src/main/resources/db/migration/V*.sql | sort -V); do
 done
 ```
 
-On Windows, run the same files one by one with `psql ... -f <file>` in the order V2, V3, V4, V5, V6, V10, V11, V12, V20, V21, V22.
+On Windows, run the same files one by one with `psql ... -f <file>` in the order V2, V3, V4, V5, V6, V10, V11, V12, V20, V21, V22, V30, V31.
 `V5` renames the legacy `USER` role to `CUSTOMER` and `V6` seeds the permission catalogue and the role → permission mapping. Without them, the roles and permissions are incomplete.
 
 `V10`–`V12` add the catalogue columns, the product image table and the category tree (load `database/seed-data.sql` before them). Uploaded product images are stored in the directory given by `UPLOAD_DIR` (default `./uploads`, not committed).
+
+`V30` and `V31` introduce the stock model (`inventory` on hand / reserved and the `inventory_transactions` ledger) and **convert** the existing `products.stock_quantity` values. Apply them in this order with the backend **stopped** and before its first start with this version; the verification queries are in the file headers and in `docs/ai/contracts/B03-inventory.md`.
 
 `V20` re-labels stored orders (`PENDING` → `PENDING_PAYMENT`, `CONFIRMED` → `PROCESSING`) and widens the status check. Stop the old backend before applying it and back up `orders` first.
 

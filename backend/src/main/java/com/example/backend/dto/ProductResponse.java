@@ -32,8 +32,11 @@ public class ProductResponse {
         }
     }
 
-    /** Does not touch images, so it never triggers an extra query. */
-    public static ProductResponse from(Product p) {
+    /**
+     * Does not touch images, so it never triggers an extra query. {@code available} is the sellable quantity
+     * (on hand minus reserved) from the inventory; it is what the public {@code stockQuantity} field means since B03.
+     */
+    public static ProductResponse from(Product p, int available) {
         ProductResponse r = new ProductResponse();
         r.id = p.getId();
         r.categoryId = p.getCategory() != null ? p.getCategory().getId() : null;
@@ -41,7 +44,7 @@ public class ProductResponse {
         r.name = p.getName();
         r.description = p.getDescription();
         r.price = p.getPrice();
-        r.stockQuantity = p.getStockQuantity();
+        r.stockQuantity = available;
         r.image = p.getImage();
         r.status = p.getStatus().name();
         r.slug = p.getSlug();
@@ -52,8 +55,8 @@ public class ProductResponse {
     }
 
     /** {@code images} must already be ordered by sort_order and belong to {@code p}. */
-    public static ProductResponse from(Product p, List<ProductImage> images) {
-        ProductResponse r = from(p);
+    public static ProductResponse from(Product p, List<ProductImage> images, int available) {
+        ProductResponse r = from(p, available);
         List<ProductImage> safe = images == null ? List.of() : images;
         r.images = safe.stream().map(ImageDto::from).toList();
         if (!safe.isEmpty()) {
