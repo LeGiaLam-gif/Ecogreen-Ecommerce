@@ -18,6 +18,7 @@ PostgreSQL 16, database `ecogreen`. This document describes the schema that exis
 | `…/V12` | `categories`: `parent_id` (tree) and `slug` |
 | `…/V30` | `inventory` (on hand / reserved, CHECKs) — **converts** `products.stock_quantity` + the stock held by unpaid orders |
 | `…/V31` | `inventory_transactions` (stock ledger, unique partial idempotency index) + one opening row per product |
+| `…/V70` | `addresses` (customer address book, FK to `users` `ON DELETE CASCADE`, partial unique index: one default per user) |
 | `DataLoader` (at startup) | makes sure the roles `CUSTOMER`, `MANAGER`, `ADMIN` exist |
 | Hibernate `ddl-auto=update` | creates missing tables/columns from the JPA entities in development |
 
@@ -33,7 +34,8 @@ roles ─┬─< user_roles >─┬─ users ─┬─< refresh_tokens
                         │         ├─< orders ─┬─< order_items >─ products
                         │         │           ├─< payments
                         │         │           └─< return_requests
-                        │         └─< return_requests
+                        │         ├─< return_requests
+                        │         └─< addresses (ON DELETE CASCADE)
 
 products ── inventory (1:1, ON DELETE CASCADE)   products ─< inventory_transactions (RESTRICT) >─ users (actor, SET NULL)
 ```
@@ -53,6 +55,7 @@ products ── inventory (1:1, ON DELETE CASCADE)   products ─< inventory_tra
 | `permissions` | `code` (unique, 100, e.g. `product:create`), `description`. The Java source of truth is `security/Permissions.java`; `PermissionsCatalogueTest` checks `V6` against it |
 | `role_permissions` | `(role_id, permission_id)` primary key, foreign keys `ON DELETE CASCADE`, index on `permission_id`. `ADMIN` has all 27, `MANAGER` 24 (all except `system:configure`, `audit:view`, `user:disable`), `CUSTOMER` none |
 | `refresh_tokens` | `user_id`, `token_hash` (unique SHA-256 of the opaque token; the token itself is never stored), `family_id`, `expires_at`, `revoked`, `replaced_by_id`, `created_at`. Expired rows are not purged yet |
+| `addresses` | `user_id` (→ `users`, `ON DELETE CASCADE`), `recipient_name`, `phone`, `line1`, `ward`, `district`, `province` (all NOT NULL), `is_default`, timestamps. Index `(user_id)`; unique partial index `(user_id) WHERE is_default` = at most one default per user. At most 10 rows per user (service rule). Orders keep their own text snapshot and never reference this table |
 
 ### Catalogue and cart
 

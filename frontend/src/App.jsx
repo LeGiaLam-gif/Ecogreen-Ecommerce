@@ -14,6 +14,7 @@ import Payment from './pages/Payment';
 import OrderSuccess from './pages/OrderSuccess';
 import Orders from './pages/Orders';
 import OrderDetail from './pages/OrderDetail';
+import Addresses from './pages/Addresses';
 import FAQ from './pages/FAQ';
 import ContactUs from './pages/ContactUs';
 import ReturnPolicy from './pages/ReturnPolicy';
@@ -54,6 +55,7 @@ function AppContent() {
           <Route path="/order-success/:orderId" element={<ProtectedRoute><OrderSuccess /></ProtectedRoute>} />
           <Route path="/orders" element={<ProtectedRoute><Orders /></ProtectedRoute>} />
           <Route path="/orders/:id" element={<ProtectedRoute><OrderDetail /></ProtectedRoute>} />
+          <Route path="/account/addresses" element={<ProtectedRoute><Addresses /></ProtectedRoute>} />
 
           {/* Admin CMS - requires the ADMIN role, re-checked on every API call server-side too. */}
           <Route

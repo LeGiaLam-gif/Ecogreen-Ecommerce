@@ -1,0 +1,27 @@
+.addr-page { max-width: 850px; margin: 30px auto; padding: 0 16px; }
+.addr-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; gap: 12px; flex-wrap: wrap; }
+.addr-title { margin: 0; color: #1b3a1f; font-size: 1.5rem; font-weight: 700; }
+.addr-count { color: #64748b; font-size: 0.9rem; }
+.addr-list { display: flex; flex-direction: column; gap: 14px; }
+.addr-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.03); }
+.addr-card.is-default { border-color: #2e7d32; }
+.addr-card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.addr-name { font-weight: 700; color: #1e293b; }
+.addr-phone { color: #475569; margin-left: 8px; }
+.addr-line { margin: 6px 0 0; color: #334155; }
+.addr-badge { background: #e8f5e9; color: #2e7d32; font-size: 0.75rem; font-weight: 700; padding: 3px 8px; border-radius: 4px; margin-left: 8px; }
+.addr-actions { display: flex; gap: 14px; margin-top: 10px; flex-wrap: wrap; }
+.addr-link-btn { border: none; background: none; cursor: pointer; font-weight: 600; font-family: inherit; color: #1976d2; padding: 0; }
+.addr-link-btn.danger { color: #dc2626; }
+.addr-link-btn:disabled { color: #9ca3af; cursor: default; }
+.addr-btn { padding: 9px 18px; border: none; border-radius: 6px; background: #2e7d32; color: #fff; font-weight: 600; cursor: pointer; font-family: inherit; }
+.addr-btn.secondary { background: #e2e8f0; color: #334155; }
+.addr-btn:disabled { opacity: 0.6; cursor: default; }
+.addr-form { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 20px; margin-bottom: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.addr-form .full { grid-column: 1 / -1; }
+.addr-field label { display: block; font-size: 0.85rem; font-weight: 600; color: #334155; margin-bottom: 4px; }
+.addr-field input[type="text"], .addr-field input[type="tel"] { width: 100%; box-sizing: border-box; padding: 9px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-family: inherit; }
+.addr-field .err { color: #c62828; font-size: 0.8rem; margin-top: 3px; }
+.addr-form-actions { display: flex; gap: 10px; }
+.addr-empty { text-align: center; padding: 50px 20px; background: #fff; border-radius: 12px; border: 1px solid #e2e8f0; color: #64748b; }
+@media (max-width: 600px) { .addr-form { grid-template-columns: 1fr; } }

@@ -79,6 +79,30 @@ Contract: [`docs/ai/contracts/B03-inventory.md`](./docs/ai/contracts/B03-invento
 | GET | `/{productId}/transactions` | `inventory:view` | the stock ledger, newest first |
 | PATCH | `/{productId}/adjust` | `inventory:adjust` | `{ quantityDelta, reason }` (reason required, ≤ 255); delta 0 or a result below the reserved quantity → 400 |
 
+## Address book — `/api/v1/users/me/addresses` (B08, any logged-in user)
+
+Contract: [`docs/ai/contracts/B08-customer.md`](./docs/ai/contracts/B08-customer.md). The owner is always the caller; someone else's address → 403.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/` | the caller's addresses (default first); not paged, at most 10 |
+| POST | `/` | `{ recipientName, phone, line1, ward, district, province, isDefault? }` → 201; the first address is always the default; the 11th → 400 `BUSINESS_RULE_VIOLATION` |
+| PUT | `/{id}` | same body; `isDefault: true` moves the default |
+| PATCH | `/{id}/default` | makes this address the only default |
+| DELETE | `/{id}` | 204; deleting the default promotes the most recent remaining address |
+
+## Admin users — `/api/v1/admin/users` (B08)
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| GET | `/` | `user:view` | query `keyword`, `role` (`CUSTOMER`/`MANAGER`/`ADMIN`), `active`, `page`, `size` (default 20, max 100), `sort` (`id`, `username`, `email`, `createdAt`) |
+| GET | `/{id}` | `user:view` | adds `orderCount`, `returnRequestCount` |
+| GET | `/{id}/orders` | `user:view` | the user's orders, paged; query `status`, `page`, `size`, `sort` |
+| PATCH | `/{id}/disable` | `user:disable` | `active=false` + all refresh tokens revoked; takes effect on the next API call |
+| PATCH | `/{id}/enable` | `user:disable` | |
+| PATCH | `/{id}/roles` | `user:update` | `{ roles: [...] }` (complete set); only an `ADMIN` may grant or remove `ADMIN` (403) |
+| DELETE | `/{id}` | `user:disable` | 204; 409 for yourself, the last active admin, or a user with orders / return requests |
+
 ## Cart — `/api/cart` (User; always the caller's own cart)
 
 | Method | Path | Body |
@@ -134,12 +158,10 @@ Payment is **simulated**; there is no gateway and no webhook.
 
 | Method | Path | Access | Notes |
 |---|---|---|---|
-| GET | `/api/users` | Admin | all users (with roles and permissions) |
-| DELETE | `/api/users/{id}` | Admin | hard delete |
 | GET | `/api/admin/stats` | Admin | `{ totalUsers, totalProducts, totalOrders }` |
 | GET | `/api/admin/reports/revenue-over-time` | Admin | query `range`, `groupBy` |
 | GET | `/api/admin/reports/orders-by-status` | Admin | |
 | GET | `/api/admin/reports/top-products` | Admin | query `limit` (default 5), `range` |
 | GET | `/api/admin/reports/summary` | Admin | query `range` |
 
-`GET /api/users/me` and the former `/api/auth/*` endpoints no longer exist; use `/api/v1/auth/me` and `/api/v1/auth/*`.
+`GET /api/users`, `DELETE /api/users/{id}` (replaced by `/api/v1/admin/users`), `GET /api/users/me` and the former `/api/auth/*` endpoints no longer exist; use `/api/v1/auth/me` and `/api/v1/auth/*`.

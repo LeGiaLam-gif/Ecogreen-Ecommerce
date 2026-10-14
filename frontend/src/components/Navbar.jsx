@@ -110,6 +110,15 @@ const Navbar = ({ searchTerm, setSearchTerm }) => {
                   </Link>
 
                   <Link
+                    to="/account/addresses"
+                    className="dropdown-item"
+                    onClick={() => setDropdownOpen(false)}
+                  >
+                    <span className="item-icon">📍</span>
+                    <span>Sổ địa chỉ</span>
+                  </Link>
+
+                  <Link
                     to="/policy/returns"
                     className="dropdown-item"
                     onClick={() => setDropdownOpen(false)}

@@ -8,7 +8,7 @@ import { getAllCategories, createCategory, updateCategory, deleteCategory } from
 import { listAdminOrders, changeOrderStatus } from '../../services/orderApi';
 import { getOrdersByStatus } from '../../services/reportApi';
 import { ORDER_STATUS, ORDER_STATUS_KEYS, orderStatusInfo } from '../../utils/orderStatus';
-import { getAllUsers, deleteUser } from '../../services/userApi';
+import { listAdminUsers, disableUser, enableUser, deleteUser } from '../../services/userApi';
 import { getAllReturns, updateReturnStatus } from '../../services/returnApi';
 import SalesDashboard from './SalesDashboard';
 import { resolveProductImage } from '../../utils/imageResolver';
@@ -32,6 +32,7 @@ const STATUS_MAP = {
   CANCELLED: { label: 'Đã hủy', color: '#721c24', bg: '#f8d7da' },
 };
 const ORDER_PAGE_SIZE = 20;
+const USER_PAGE_SIZE = 20;
 
 /**
  * Admin CMS - Quản trị toàn diện hệ sinh thái thương mại điện tử EcoGreen.
@@ -53,6 +54,10 @@ const AdminDashboard = () => {
   const [orderPage, setOrderPage] = useState(0);
   const [orderCounts, setOrderCounts] = useState({});
   const [users, setUsers] = useState([]);
+  const [userMeta, setUserMeta] = useState({ page: 0, totalPages: 1, totalElements: 0 });
+  const [userPage, setUserPage] = useState(0);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [userReload, setUserReload] = useState(0);
   const [returns, setReturns] = useState([]);
 
   // Bộ lọc chuyên sâu cho từng trang
@@ -68,6 +73,7 @@ const AdminDashboard = () => {
   const [productReload, setProductReload] = useState(0);
   const [returnStatusFilter, setReturnStatusFilter] = useState('ALL');
   const [userRoleFilter, setUserRoleFilter] = useState('ALL');
+  const [userActiveFilter, setUserActiveFilter] = useState('ALL');
 
   // Modals
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
@@ -100,13 +106,12 @@ const AdminDashboard = () => {
     try {
       if (activeTab === 'dashboard') {
         // Tải đồng thời để tính các chỉ số vận hành và cảnh báo thời gian thực
-        const [p, c, o, counts, r, u] = await Promise.all([
+        const [p, c, o, counts, r] = await Promise.all([
           getAdminProducts({ page: 0, size: DASHBOARD_PRODUCT_SIZE }),
           getAllCategories(),
           listAdminOrders({ page: 0, size: 5 }),
           getOrdersByStatus(),
           getAllReturns(),
-          getAllUsers(),
         ]);
 
         setProducts(p.items || []);
@@ -115,7 +120,6 @@ const AdminDashboard = () => {
         setOrderMeta(o.meta);
         setOrderCounts(counts);
         setReturns(r);
-        setUsers(u);
       } else if (activeTab === 'products') {
         // The product list itself is loaded (and paged / filtered by the server) in the effect below.
         setCategories(await getAllCategories());
@@ -134,8 +138,6 @@ const AdminDashboard = () => {
         setOrders(o.items);
         setOrderMeta(o.meta);
         setOrderCounts(counts);
-      } else if (activeTab === 'users') {
-        setUsers(await getAllUsers());
       } else if (activeTab === 'returns') {
         setReturns(await getAllReturns());
       }
@@ -174,6 +176,35 @@ const AdminDashboard = () => {
       controller.abort();
     };
   }, [activeTab, searchTerm, productCategoryFilter, productStatusFilter, productPage, productReload]);
+
+  // Users tab (B08): search / role / active filters and paging are applied by the server; a new request cancels the previous one.
+  useEffect(() => {
+    if (activeTab !== 'users') return undefined;
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      setUsersLoading(true);
+      try {
+        const result = await listAdminUsers({
+          keyword: searchTerm.trim() || undefined,
+          role: userRoleFilter === 'ALL' ? undefined : userRoleFilter,
+          active: userActiveFilter === 'ALL' ? undefined : userActiveFilter,
+          page: userPage,
+          size: USER_PAGE_SIZE,
+        }, { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        setUsers(result.items || []);
+        setUserMeta(result.meta || { page: 0, totalPages: 1, totalElements: 0 });
+      } catch (err) {
+        if (!controller.signal.aborted) setErrorMsg(err.friendlyMessage || 'Không thể tải danh sách người dùng.');
+      } finally {
+        if (!controller.signal.aborted) setUsersLoading(false);
+      }
+    }, 300);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [activeTab, searchTerm, userRoleFilter, userActiveFilter, userPage, userReload]);
 
   // --- Products Handler ---
   const refreshProducts = () => {
@@ -282,12 +313,31 @@ const AdminDashboard = () => {
     }
   };
 
-  // --- Users Handler ---
+  // --- Users Handler (B08) ---
+  const reloadUsers = () => setUserReload((n) => n + 1);
+
+  const handleToggleUser = async (u) => {
+    const disabling = u.active;
+    const question = disabling
+      ? `Khóa tài khoản "${u.username}"? Người dùng sẽ bị đăng xuất khỏi mọi thiết bị.`
+      : `Mở khóa tài khoản "${u.username}"?`;
+    if (!window.confirm(question)) return;
+    try {
+      if (disabling) await disableUser(u.id);
+      else await enableUser(u.id);
+      reloadUsers();
+    } catch (e) {
+      alert(e.friendlyMessage || 'Thao tác thất bại.');
+    }
+  };
+
+  // The server refuses (409) for a user with orders / return requests, for yourself and for the last active admin;
+  // its message ("hãy khóa tài khoản") is shown as is.
   const handleDeleteUser = async (id, name) => {
     if (!window.confirm(`Bạn có chắc chắn muốn xóa tài khoản "${name}"?`)) return;
     try {
       await deleteUser(id);
-      loadData();
+      reloadUsers();
     } catch (e) {
       alert(e.friendlyMessage || 'Thao tác thất bại.');
     }
@@ -342,15 +392,6 @@ const AdminDashboard = () => {
       String(r.orderId).includes(searchTerm) ||
       (r.username && r.username.toLowerCase().includes(searchTerm.toLowerCase()));
     return matchStatus && matchSearch;
-  });
-
-  // Lọc người dùng theo điều kiện
-  const filteredUsers = users.filter(u => {
-    const matchRole = userRoleFilter === 'ALL' || (u.roles && u.roles.includes(userRoleFilter));
-    const matchSearch = searchTerm === '' ||
-      (u.username && u.username.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      (u.email && u.email.toLowerCase().includes(searchTerm.toLowerCase()));
-    return matchRole && matchSearch;
   });
 
   return (
@@ -1039,17 +1080,27 @@ const AdminDashboard = () => {
                     type="text"
                     placeholder="Tìm theo tên đăng nhập hoặc email..."
                     value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
+                    onChange={(e) => { setUserPage(0); setSearchTerm(e.target.value); }}
                     className="admin-search-input"
                   />
                   <select
                     value={userRoleFilter}
-                    onChange={(e) => setUserRoleFilter(e.target.value)}
+                    onChange={(e) => { setUserPage(0); setUserRoleFilter(e.target.value); }}
                     className="admin-filter-select"
                   >
                     <option value="ALL">Tất cả vai trò</option>
                     <option value="ADMIN">Quản trị viên (ADMIN)</option>
+                    <option value="MANAGER">Quản lý (MANAGER)</option>
                     <option value="CUSTOMER">Khách hàng (CUSTOMER)</option>
+                  </select>
+                  <select
+                    value={userActiveFilter}
+                    onChange={(e) => { setUserPage(0); setUserActiveFilter(e.target.value); }}
+                    className="admin-filter-select"
+                  >
+                    <option value="ALL">Mọi trạng thái</option>
+                    <option value="true">Đang hoạt động</option>
+                    <option value="false">Đã khóa</option>
                   </select>
                 </div>
               </div>
@@ -1062,12 +1113,13 @@ const AdminDashboard = () => {
                       <th>Tên tài khoản</th>
                       <th>Email</th>
                       <th>Vai trò phân quyền</th>
+                      <th>Trạng thái</th>
                       <th style={{ textAlign: 'center' }}>Thao tác</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredUsers.map((u) => (
-                      <tr key={u.id}>
+                    {users.map((u) => (
+                      <tr key={u.id} style={u.active ? undefined : { opacity: 0.6 }}>
                         <td className="admin-cell-strong">#{u.id}</td>
                         <td className="admin-cell-strong">{u.username}</td>
                         <td>{u.email}</td>
@@ -1079,34 +1131,54 @@ const AdminDashboard = () => {
                                 padding: '4px 8px',
                                 borderRadius: '4px',
                                 fontSize: '0.8rem',
-                                backgroundColor: r === 'ADMIN' ? '#c62828' : '#1976d2',
+                                backgroundColor: r === 'ADMIN' ? '#c62828' : (r === 'MANAGER' ? '#ef6c00' : '#1976d2'),
                                 color: '#fff',
                                 marginRight: '4px',
                                 fontWeight: 600,
                               }}
                             >
-                              {r === 'ADMIN' ? 'Quản trị viên' : 'Khách hàng'}
+                              {r === 'ADMIN' ? 'Quản trị viên' : (r === 'MANAGER' ? 'Quản lý' : 'Khách hàng')}
                             </span>
                           ))}
                         </td>
+                        <td>
+                          <span style={{ color: u.active ? '#2e7d32' : '#9ca3af', fontWeight: 600 }}>
+                            {u.active ? 'Hoạt động' : 'Đã khóa'}
+                          </span>
+                        </td>
                         <td style={{ textAlign: 'center' }}>
-                          {!u.roles.includes('ADMIN') ? (
-                            <button
-                              onClick={() => handleDeleteUser(u.id, u.username)}
-                              className="admin-btn-action-delete"
-                            >
-                              Xóa
-                            </button>
+                          {u.id === user?.id ? (
+                            <span style={{ color: '#9ca3af', fontSize: '0.85rem' }}>Bạn</span>
                           ) : (
-                            <span style={{ color: '#9ca3af', fontSize: '0.85rem' }}>Bảo vệ</span>
+                            <>
+                              <button
+                                onClick={() => handleToggleUser(u)}
+                                className="admin-btn-action-edit"
+                              >
+                                {u.active ? 'Khóa' : 'Mở khóa'}
+                              </button>
+                              <button
+                                onClick={() => handleDeleteUser(u.id, u.username)}
+                                className="admin-btn-action-delete"
+                              >
+                                Xóa
+                              </button>
+                            </>
                           )}
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-                {filteredUsers.length === 0 && (
+                {!usersLoading && users.length === 0 && (
                   <div className="admin-empty">Không tìm thấy người dùng nào phù hợp.</div>
+                )}
+                {userMeta.totalPages > 1 && (
+                  <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '14px', padding: '14px' }}>
+                    <button type="button" disabled={userPage === 0} onClick={() => setUserPage((x) => x - 1)}>← Trước</button>
+                    <span>Trang {userPage + 1} / {userMeta.totalPages} ({userMeta.totalElements} người dùng)</span>
+                    <button type="button" disabled={userPage + 1 >= userMeta.totalPages} onClick={() => setUserPage((x) => x + 1)}>Sau →</button>
+                  </div>
                 )}
               </div>
             </div>

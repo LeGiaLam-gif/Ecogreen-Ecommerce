@@ -21,6 +21,7 @@ admin area to keep the catalogue up to date, move orders through their statuses,
 - Product detail page (by id or slug) with an image gallery and a struck-through compare price when the product has one.
 - Server-side shopping cart with stock checks.
 - Checkout with recipient name, phone and delivery address.
+- Address book (`/account/addresses`): up to 10 saved addresses, one default, add / edit / delete / set default. Checkout does not use it yet (planned in B04).
 - Choose a payment method — cash on delivery, VietQR, MoMo or VNPAY — and confirm payment on a simulated payment page
   (QR codes are displayed, but no money moves and no external service is called).
 - Order history and order detail with a status timeline; an unpaid order can be cancelled by its owner.
@@ -36,7 +37,7 @@ admin area to keep the catalogue up to date, move orders through their statuses,
 - Categories: create, edit, delete.
 - Orders: search and filter orders, and move each one to the next allowed status (the server decides which moves are allowed).
 - Returns: approve or reject requests with a note to the customer.
-- Users: list with role filter, delete.
+- Users: server-side search, role and active filters with paging; lock / unlock an account (a locked user is signed out everywhere); delete only a user with no orders or return requests (otherwise lock the account). You cannot lock or delete yourself or the last active admin.
 
 Access is by role: `CUSTOMER`, `MANAGER`, `ADMIN`. The backend has a permission system (27 permission codes, assigned to roles in
 the database), but today every admin endpoint and the admin UI still require the `ADMIN` role; a `MANAGER` cannot use them yet.
@@ -44,7 +45,7 @@ the database), but today every admin endpoint and the admin UI still require the
 ### What is not included
 
 Real payment gateway and webhooks, discounts and shipping cost,
-saved addresses, notifications,
+notifications,
 analytics events, audit log, Docker images for the app, CI pipeline, frontend tests. The planned work is described in
 [`docs/ai/MODULE_SPECS.md`](./docs/ai/MODULE_SPECS.md).
 
@@ -161,12 +162,14 @@ for f in $(ls backend/src/main/resources/db/migration/V*.sql | sort -V); do
 done
 ```
 
-On Windows, run the same files one by one with `psql ... -f <file>` in the order V2, V3, V4, V5, V6, V10, V11, V12, V20, V21, V22, V30, V31.
+On Windows, run the same files one by one with `psql ... -f <file>` in the order V2, V3, V4, V5, V6, V10, V11, V12, V20, V21, V22, V30, V31, V70.
 `V5` renames the legacy `USER` role to `CUSTOMER` and `V6` seeds the permission catalogue and the role → permission mapping. Without them, the roles and permissions are incomplete.
 
 `V10`–`V12` add the catalogue columns, the product image table and the category tree (load `database/seed-data.sql` before them). Uploaded product images are stored in the directory given by `UPLOAD_DIR` (default `./uploads`, not committed).
 
 `V30` and `V31` introduce the stock model (`inventory` on hand / reserved and the `inventory_transactions` ledger) and **convert** the existing `products.stock_quantity` values. Apply them in this order with the backend **stopped** and before its first start with this version; the verification queries are in the file headers and in `docs/ai/contracts/B03-inventory.md`.
+
+`V70` creates the `addresses` table (customer address book) with its foreign key and the "one default per user" unique index; it changes no existing data. Apply it before relying on that guarantee in the database; details in `docs/ai/contracts/B08-customer.md`.
 
 `V20` re-labels stored orders (`PENDING` → `PENDING_PAYMENT`, `CONFIRMED` → `PROCESSING`) and widens the status check. Stop the old backend before applying it and back up `orders` first.
 
