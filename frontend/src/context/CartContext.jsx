@@ -10,72 +10,86 @@ export const useCart = () => {
   return ctx;
 };
 
+const EMPTY_CART = { items: [], subtotal: 0, totalItems: 0 };
+
 /**
  * The cart is always the server-side (database) cart for the authenticated
  * user - this is what makes the same cart show up on every device. When no
- * one is logged in, cartItems is simply empty; guest browsing does not
+ * one is logged in, the cart is simply empty; guest browsing does not
  * fabricate a fake local cart for checkout purposes.
+ *
+ * The cart is fetched ONCE per signed-in user (this provider is the only place that does it). Every change answers with
+ * the whole updated cart, which replaces the state, so nothing is fetched again. `subtotal` and `totalItems` come from the
+ * server and are only displayed; nothing here adds up prices.
  */
 export const CartProvider = ({ children }) => {
   const { user } = useAuth();
-  const [cartItems, setCartItems] = useState([]);
-  const [totalPrice, setTotalPrice] = useState(0);
+  const userId = user?.id ?? null;
+  const [cart, setCart] = useState(EMPTY_CART);
   const [loading, setLoading] = useState(false);
 
-  const applyCart = (cart) => {
-    setCartItems(cart?.items || []);
-    setTotalPrice(cart?.totalPrice || 0);
-  };
+  const applyCart = useCallback((data) => {
+    setCart({
+      items: data?.items || [],
+      subtotal: data?.subtotal || 0,
+      totalItems: data?.totalItems || 0,
+    });
+  }, []);
 
   const refreshCart = useCallback(async () => {
-    if (!user) {
-      setCartItems([]);
-      setTotalPrice(0);
+    if (!userId) {
+      setCart(EMPTY_CART);
       return;
     }
     setLoading(true);
     try {
-      const cart = await cartApi.getCart();
-      applyCart(cart);
+      applyCart(await cartApi.getCart());
     } catch {
       // Not fatal - an empty cart is a valid, expected state.
-      setCartItems([]);
-      setTotalPrice(0);
+      setCart(EMPTY_CART);
     } finally {
       setLoading(false);
     }
-  }, [user]);
+  }, [userId, applyCart]);
 
   useEffect(() => {
     refreshCart();
   }, [refreshCart]);
 
   const addToCart = async (productId, quantity = 1) => {
-    const cart = await cartApi.addToCart(productId, quantity);
-    applyCart(cart);
+    applyCart(await cartApi.addToCart(productId, quantity));
   };
 
   const updateQuantity = async (cartItemId, quantity) => {
-    const cart = await cartApi.updateCartItem(cartItemId, quantity);
-    applyCart(cart);
+    applyCart(await cartApi.updateCartItem(cartItemId, quantity));
   };
 
   const removeFromCart = async (cartItemId) => {
-    const cart = await cartApi.removeCartItem(cartItemId);
-    applyCart(cart);
+    applyCart(await cartApi.removeCartItem(cartItemId));
   };
 
   const clearCart = async () => {
     await cartApi.clearCart();
-    setCartItems([]);
-    setTotalPrice(0);
+    setCart(EMPTY_CART);
   };
 
-  const totalItems = cartItems.reduce((sum, item) => sum + item.quantity, 0);
+  // After a successful checkout the server has already emptied the cart: no request is needed to know that.
+  const resetCart = useCallback(() => setCart(EMPTY_CART), []);
 
   return (
     <CartContext.Provider
-      value={{ cartItems, totalItems, totalPrice, loading, addToCart, updateQuantity, removeFromCart, clearCart, refreshCart }}
+      value={{
+        cartItems: cart.items,
+        totalItems: cart.totalItems,
+        subtotal: cart.subtotal,
+        loading,
+        addToCart,
+        updateQuantity,
+        removeFromCart,
+        clearCart,
+        refreshCart,
+        resetCart,
+      }}
     >
       {children}
     </CartContext.Provider>

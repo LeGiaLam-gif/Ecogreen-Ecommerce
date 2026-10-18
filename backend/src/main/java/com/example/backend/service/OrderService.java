@@ -33,7 +33,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -55,8 +54,6 @@ public class OrderService {
     @Autowired private OrderRepository orderRepository;
     @Autowired private OrderItemRepository orderItemRepository;
     @Autowired private OrderStatusHistoryRepository historyRepository;
-    @Autowired private CartRepository cartRepository;
-    @Autowired private CartItemRepository cartItemRepository;
     @Autowired private ProductRepository productRepository;
     @Autowired private PaymentRepository paymentRepository;
     @Autowired private UserRepository userRepository;
@@ -69,74 +66,8 @@ public class OrderService {
     // ------------------------------------------------------------------------------------------------------------
 
     /**
-     * TEMPORARY-COMPAT(B05): the legacy checkout behind {@code POST /api/orders}; removed when B04 ships
-     * {@code POST /api/v1/checkout}.
-     *
-     * <p>One transaction: validate the cart, create the PENDING_PAYMENT order with its items and first history row, reserve
-     * the stock through the inventory port (atomic conditional UPDATE), create the pending payment, clear the cart. If any
-     * product runs out, {@code InsufficientStockException} rolls back all of it, including the order.
-     */
-    @Transactional
-    public Order checkout(User user, String customerName, String customerPhone, String shippingAddress,
-                           String paymentMethod) {
-        Cart cart = cartRepository.findByUserId(user.getId())
-                .orElseThrow(() -> new ResourceNotFoundException("Không tìm thấy giỏ hàng."));
-
-        List<CartItem> cartItems = cartItemRepository.findByCartId(cart.getId());
-        if (cartItems.isEmpty()) {
-            throw new BadRequestException("Giỏ hàng của bạn đang trống.");
-        }
-        if (isBlank(customerName) || isBlank(customerPhone) || isBlank(shippingAddress)) {
-            throw new BadRequestException("Vui lòng nhập đầy đủ tên người nhận, số điện thoại và địa chỉ giao hàng.");
-        }
-
-        // 1. Re-read every product from the database (one query); prices and status never come from the client.
-        List<Long> productIds = cartItems.stream().map(ci -> ci.getProduct().getId()).toList();
-        Map<Long, Product> products = productRepository.findAllById(productIds).stream()
-                .collect(Collectors.toMap(Product::getId, Function.identity()));
-
-        List<OrderItemDraft> drafts = new ArrayList<>();
-        BigDecimal total = BigDecimal.ZERO;
-        for (CartItem item : cartItems) {
-            Product product = products.get(item.getProduct().getId());
-            if (product == null) {
-                throw new ResourceNotFoundException("Sản phẩm không còn tồn tại.");
-            }
-            if (product.getStatus() != Product.Status.ACTIVE) {
-                throw new BadRequestException("Sản phẩm \"" + product.getName() + "\" hiện không còn kinh doanh.");
-            }
-            drafts.add(new OrderItemDraft(product.getId(), item.getQuantity(), product.getPrice()));
-            total = total.add(product.getPrice().multiply(BigDecimal.valueOf(item.getQuantity())));
-        }
-        // Reserve in product-id order so two checkouts that share products always lock rows in the same order.
-        drafts.sort(Comparator.comparing(OrderItemDraft::productId));
-
-        // 2. Order + items + first history row (no stock movement yet).
-        Order order = createPendingOrder(user.getId(), drafts, total, BigDecimal.ZERO, BigDecimal.ZERO, total,
-                customerName, customerPhone, shippingAddress, null);
-
-        // 3. Take the stock. Atomic per product; an InsufficientStockException aborts and rolls back everything above.
-        for (OrderItemDraft draft : drafts) {
-            inventoryGateway.reserve(draft.productId(), draft.quantity(), INVENTORY_REF_TYPE, order.getId());
-        }
-
-        // 4. Pending payment for the mock payment flow.
-        Payment payment = new Payment();
-        payment.setOrder(order);
-        payment.setPaymentMethod(paymentMethod != null ? paymentMethod : COD);
-        payment.setAmount(total);
-        payment.setStatus(Payment.Status.PENDING);
-        paymentRepository.save(payment);
-
-        // 5. Only clear the cart once everything above succeeded.
-        cartItemRepository.deleteAllByCartId(cart.getId());
-
-        return order;
-    }
-
-    /**
      * Persists a PENDING_PAYMENT order with its items (price snapshot) and the first history row. It does NOT reserve stock
-     * and does NOT touch the cart: the caller orchestrates both inside one transaction. Money is validated here
+     * and does NOT touch the cart: the caller (CheckoutService, B04) orchestrates both inside one transaction. Money is validated here
      * (never trusted): the lines must add up to {@code subtotal} and {@code total} must equal
      * {@code subtotal - discountAmount + shippingFee}.
      */
@@ -489,13 +420,8 @@ public class OrderService {
     }
 
     // ------------------------------------------------------------------------------------------------------------
-    // TEMPORARY-COMPAT(B05): getItems serves the legacy POST /api/orders response (until B03 rewrites checkout);
-    // getById/getOwnedOrAdmin serve PaymentController (until B06 rewrites it).
+    // TEMPORARY-COMPAT(B05): getById/getOwnedOrAdmin serve PaymentController (until B06 rewrites it).
     // ------------------------------------------------------------------------------------------------------------
-
-    public List<OrderItem> getItems(Long orderId) {
-        return orderItemRepository.findByOrderIdWithProduct(orderId);
-    }
 
     public Order getById(Long id) {
         return orderRepository.findById(id)

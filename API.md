@@ -103,21 +103,33 @@ Contract: [`docs/ai/contracts/B08-customer.md`](./docs/ai/contracts/B08-customer
 | PATCH | `/{id}/roles` | `user:update` | `{ roles: [...] }` (complete set); only an `ADMIN` may grant or remove `ADMIN` (403) |
 | DELETE | `/{id}` | `user:disable` | 204; 409 for yourself, the last active admin, or a user with orders / return requests |
 
-## Cart — `/api/cart` (User; always the caller's own cart)
+## Cart — `/api/v1/cart` (User; always the caller's own cart)
 
 | Method | Path | Body |
 |---|---|---|
-| GET | `/` | → `{ cartId, items[], totalPrice, totalItems }` |
-| POST | `/items` | `{ productId, quantity? }` (default 1); the quantity is checked against the available stock on the server (400 "Kho chỉ còn N sản phẩm.") |
-| PUT | `/items/{id}` | `{ quantity }` |
-| DELETE | `/items/{id}` | |
-| DELETE | `/` | empties the cart |
+| GET | `/` | → `{ cartId, items[{ id, product, quantity, lineTotal, availableQuantity, warning }], subtotal, totalItems }` |
+| POST | `/items` | `{ productId, quantity }`; checked against the available stock (400 `BUSINESS_RULE_VIOLATION`) → whole cart |
+| PATCH | `/items/{id}` | `{ quantity }` → whole cart; a line of another user is 404 |
+| DELETE | `/items/{id}` | → whole cart |
+| DELETE | `/` | empties the cart, 204 |
+
+## Checkout — `/api/v1/checkout` (User)
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/preview` | `{ discountCode? }` → `{ items[], subtotal, discountAmount, shippingFee, total, issues[] }`; writes nothing |
+| POST | `/` | `{ addressId \| customerName + customerPhone + shippingAddress, discountCode?, paymentMethod? }` (`COD` default, `VIETQR`, `MOMO`) → `201` order. One transaction: lock the cart → validate → create the `PENDING_PAYMENT` order with a price snapshot → reserve stock (ascending product id) → `PENDING` payment → empty the cart. Prices and totals are never read from the request |
+
+Contract: [`docs/ai/contracts/B04-checkout.md`](./docs/ai/contracts/B04-checkout.md).
+
+## Discounts — `/api/v1/admin/discounts`
+
+`GET` (paged) and `GET /{id}` need `discount:view`; `POST`, `PUT /{id}`, `DELETE /{id}` need `discount:manage`.
+Body `{ code, percentOff? | amountOff?, minOrderAmount?, validFrom?, validTo?, active }`; duplicate code → 409.
 
 ## Orders — `/api/orders`
 
-| Method | Path | Access | Notes |
-|---|---|---|---|
-| POST | `/` | User | `{ customerName, customerPhone, shippingAddress, paymentMethod? }` (default `COD`). One transaction: validate stock → create the order (`PENDING_PAYMENT`) and items with price snapshot → deduct stock → write the first history row → create `PENDING` payment → empty cart |
+The legacy `POST /api/orders` is gone; orders are created by `POST /api/v1/checkout`.
 
 Reading and changing orders is on `/api/v1` (envelope `{data, meta}`, paging `page`/`size`/`sort`). Contract: [`docs/ai/contracts/B05-order.md`](./docs/ai/contracts/B05-order.md).
 

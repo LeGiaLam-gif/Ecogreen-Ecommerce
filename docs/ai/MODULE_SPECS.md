@@ -20,7 +20,7 @@ Use: give an agent `CLAUDE.md` + sections 1–3 of this file + **exactly one** m
 | B05 Order | **Done** | 10-status state machine with one writer (`OrderService.transitionStatus`), `order_status_history`, `InventoryGateway` + legacy adapter, `/api/v1` order endpoints, V20–V22 — contract `contracts/B05-order.md` |
 | B03 Inventory | **Done** | `inventory` (on hand / reserved) + `inventory_transactions` ledger, `InventoryService` is the only `InventoryGateway`, `/api/v1/admin/inventory`, V30-V31 (hand-applied) -- contract `contracts/B03-inventory.md` |
 | B08 Customer | **Done** | `addresses` book (max 10, one default), `/api/v1/users/me/addresses`, `/api/v1/admin/users` (paged list, detail, orders, disable/enable with refresh-token revocation, roles, guarded delete), self-lockout and last-admin rules, V70 (hand-applied) — contract `contracts/B08-customer.md`. Legacy `/api/users` removed; refresh tokens are revoked through a TEMPORARY-COMPAT repository because `RefreshTokenService.revokeAllForUser` does not exist (request recorded in the contract) |
-| B04 Cart & Checkout | Not started | no discounts or shipping cost; legacy `POST /api/orders` and `/api/cart/*` |
+| B04 Cart & Checkout | **Done** | `/api/v1/cart`, `/api/v1/checkout` (+ `/preview`), `/api/v1/admin/discounts`, flat shipping with free threshold, `discounts` table, V40-V41 (hand-applied) -- contract `contracts/B04-checkout.md` |
 | B06 Payment | Not started | `PaymentService.payNow` is a mock that always succeeds; no gateway, webhook or refund |
 | B07 Return & Refund | Not started | `ReturnRequest` covers a whole order, one image, no refund/restock |
 | B09 Analytics, B10 Notification | Not started | no `analytics_events`/`notifications`, no event classes |
@@ -126,7 +126,8 @@ still mentioned in the repository, with what is actually known:
 
 | ID | Where it appears | Known content |
 |---|---|---|
-| D-1 | B04 | customer totals change once shipping is enabled; must be documented when B04 ships |
+| D-1 | B04 | customer totals change once shipping is enabled; documented in `contracts/B04-checkout.md` (see D-10) |
+| D-10 | B04 | flat shipping fee `ecogreen.shipping.flat-fee` (30 000 VND) below `ecogreen.shipping.free-threshold` (500 000 VND, compared with the items total before discount, boundary ships free); both configurable. Before B04 shipping was free for everyone, so customers now pay more on orders under the threshold |
 | D-5 | `contracts/B01-auth.md` §8 | refresh token in an httpOnly cookie instead of `localStorage` — **open**, not switched |
 | D-6 | `contracts/B01-rbac.md` §3 | `MANAGER` = all permissions except `system:configure`, `audit:view`, `user:disable` — implemented as the default |
 | D-9 | `CLAUDE.md` (API contract) | the legacy `Asia/Ho_Chi_Minh` JVM/DB timezone default vs UTC in JSON — **open** |

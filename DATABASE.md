@@ -18,6 +18,8 @@ PostgreSQL 16, database `ecogreen`. This document describes the schema that exis
 | `…/V12` | `categories`: `parent_id` (tree) and `slug` |
 | `…/V30` | `inventory` (on hand / reserved, CHECKs) — **converts** `products.stock_quantity` + the stock held by unpaid orders |
 | `…/V31` | `inventory_transactions` (stock ledger, unique partial idempotency index) + one opening row per product |
+| `…/V40` | `discounts` (code unique on `upper(code)`, percent XOR amount, window and minimum CHECKs) |
+| `…/V41` | seeds `discount:view` and `discount:manage` and maps them to `ADMIN` and `MANAGER` |
 | `…/V70` | `addresses` (customer address book, FK to `users` `ON DELETE CASCADE`, partial unique index: one default per user) |
 | `DataLoader` (at startup) | makes sure the roles `CUSTOMER`, `MANAGER`, `ADMIN` exist |
 | Hibernate `ddl-auto=update` | creates missing tables/columns from the JPA entities in development |
@@ -78,6 +80,7 @@ products ── inventory (1:1, ON DELETE CASCADE)   products ─< inventory_tra
 
 | Table | Columns (key points) |
 |---|---|
+| `discounts` | `code` (stored upper-case; unique index on `upper(code)`), `percent_off` or `amount_off` (exactly one), `min_order_amount`, `valid_from`, `valid_to`, `active`, `created_at`, `updated_at`. `orders.discount_code` copies the code as text, with no foreign key |
 | `orders` | `user_id`, snapshot of `customer_name`, `customer_phone`, `shipping_address`, `subtotal`, `discount_amount`, `shipping_fee` (default 0), `discount_code`, `total_price`, `status` (10 values: `PENDING_PAYMENT`, `PAID`, `PROCESSING`, `PACKED`, `SHIPPED`, `DELIVERED`, `CANCELLED`, `RETURN_REQUESTED`, `RETURNED`, `REFUNDED`; default `PENDING_PAYMENT`; `V20`). Indexes `(user_id, created_at DESC)` and `(status, created_at DESC)` (`V22`) |
 | `order_status_history` | `order_id` (`ON DELETE CASCADE`), `old_status` (null for the first row), `new_status`, `changed_by` (`ON DELETE SET NULL`), `note`, `changed_at`; index `(order_id, changed_at)` (`V21`) |
 | `order_items` | `order_id` (`ON DELETE CASCADE`), `product_id`, `quantity` (> 0), `price` = unit price **at purchase time** |

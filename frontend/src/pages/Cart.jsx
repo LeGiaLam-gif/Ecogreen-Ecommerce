@@ -5,7 +5,7 @@ import { resolveProductImage } from '../utils/imageResolver';
 import './Cart.css';
 
 const Cart = () => {
-    const { cartItems, removeFromCart, updateQuantity, totalPrice, totalItems } = useCart();
+    const { cartItems, removeFromCart, updateQuantity, subtotal, totalItems } = useCart();
     const navigate = useNavigate();
     const [busyItemId, setBusyItemId] = useState(null);
     const [error, setError] = useState('');
@@ -72,13 +72,9 @@ const Cart = () => {
                                     <h3 className="cart-item-name">{item.product.name}</h3>
                                     <p className="cart-item-price">{Number(item.product.price).toLocaleString('vi-VN')} ₫</p>
 
-                                    {/* B03: stockQuantity is the AVAILABLE quantity from the server; show when it fell below the cart quantity */}
-                                    {item.quantity > item.product.stockQuantity && (
-                                        <p style={{ color: '#c62828', margin: '4px 0' }}>
-                                            {item.product.stockQuantity > 0
-                                                ? `Kho chỉ còn ${item.product.stockQuantity} sản phẩm — vui lòng giảm số lượng trước khi đặt hàng.`
-                                                : 'Sản phẩm này hiện đã hết hàng.'}
-                                        </p>
+                                    {/* B04: the server decides when a line cannot be ordered and sends the message to show */}
+                                    {item.warning && (
+                                        <p style={{ color: '#c62828', margin: '4px 0' }}>{item.warning}</p>
                                     )}
 
                                     <div className="cart-item-actions">
@@ -88,7 +84,7 @@ const Cart = () => {
                                                 onClick={() => handleQuantityChange(item, item.quantity - 1)}>−</button>
                                             <span>{item.quantity}</span>
                                             <button
-                                                disabled={busyItemId === item.id || item.quantity >= item.product.stockQuantity}
+                                                disabled={busyItemId === item.id || item.quantity >= item.availableQuantity}
                                                 onClick={() => handleQuantityChange(item, item.quantity + 1)}>+</button>
                                         </div>
                                         <button
@@ -100,7 +96,7 @@ const Cart = () => {
                                     </div>
                                 </div>
                                 <div className="cart-item-total">
-                                    {Number(item.subtotal).toLocaleString('vi-VN')} ₫
+                                    {Number(item.lineTotal).toLocaleString('vi-VN')} ₫
                                 </div>
                             </div>
                         ))}
@@ -111,17 +107,12 @@ const Cart = () => {
                             <h3>Tóm tắt đơn hàng</h3>
                             <div className="summary-row">
                                 <span>Tạm tính</span>
-                                <span>{Number(totalPrice).toLocaleString('vi-VN')} ₫</span>
-                            </div>
-                            <div className="summary-row">
-                                <span>Phí vận chuyển xanh</span>
-                                <span className="free-shipping">Miễn phí 🌿</span>
+                                <span>{Number(subtotal).toLocaleString('vi-VN')} ₫</span>
                             </div>
                             <div className="summary-divider"></div>
-                            <div className="summary-row total">
-                                <span>Tổng thanh toán</span>
-                                <span className="total-price">{Number(totalPrice).toLocaleString('vi-VN')} ₫</span>
-                            </div>
+                            <p style={{ color: '#64748b', fontSize: '0.9rem', margin: '4px 0 12px' }}>
+                                Phí vận chuyển và mã giảm giá được tính ở bước đặt hàng.
+                            </p>
                             <button
                                 className="checkout-btn"
                                 onClick={() => navigate('/checkout')}

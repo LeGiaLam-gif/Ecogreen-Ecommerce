@@ -20,7 +20,10 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** B01-P3: the Java catalogue is the source of truth; V6__seed_permissions.sql must not drift from it. */
+/**
+ * B01-P3: the Java catalogue is the source of truth; V6__seed_permissions.sql (the original 27 codes) and
+ * V41__discount_permissions.sql (B04: the two discount codes) must not drift from it.
+ */
 class PermissionsCatalogueTest {
 
     private static final Pattern CODE_FORMAT = Pattern.compile("^[a-z]+:[a-z_]+$");
@@ -28,6 +31,13 @@ class PermissionsCatalogueTest {
     private static String v6() throws Exception {
         try (InputStream in = PermissionsCatalogueTest.class.getResourceAsStream("/db/migration/V6__seed_permissions.sql")) {
             assertNotNull(in, "V6__seed_permissions.sql must be on the classpath");
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        }
+    }
+
+    private static String v41() throws Exception {
+        try (InputStream in = PermissionsCatalogueTest.class.getResourceAsStream("/db/migration/V41__discount_permissions.sql")) {
+            assertNotNull(in, "V41__discount_permissions.sql must be on the classpath");
             return new String(in.readAllBytes(), StandardCharsets.UTF_8);
         }
     }
@@ -49,9 +59,9 @@ class PermissionsCatalogueTest {
     }
 
     @Test
-    void catalogue_hasTwentySevenUniqueWellFormedCodes() {
-        assertEquals(27, Permissions.ALL.size());
-        assertEquals(27, new HashSet<>(Permissions.ALL).size());
+    void catalogue_hasTwentyNineUniqueWellFormedCodes() {
+        assertEquals(29, Permissions.ALL.size());
+        assertEquals(29, new HashSet<>(Permissions.ALL).size());
         Permissions.ALL.forEach(code -> assertTrue(CODE_FORMAT.matcher(code).matches(), code));
     }
 
@@ -64,17 +74,31 @@ class PermissionsCatalogueTest {
         int manager = sql.indexOf("WHERE r.name = 'MANAGER'");
         assertTrue(admin > 0 && manager > admin);
         assertFalse(sql.substring(admin, manager).contains("NOT IN"));
+        // V41: the discount codes are granted to ADMIN (no exclusion list for it either)
+        String v41 = v41();
+        int admin41 = v41.indexOf("WHERE r.name = 'ADMIN'");
+        int manager41 = v41.indexOf("WHERE r.name = 'MANAGER'");
+        assertTrue(admin41 > 0 && manager41 > admin41);
+        assertFalse(v41.substring(admin41, manager41).contains("NOT IN"));
+        assertTrue(v41.substring(admin41, manager41).contains("'discount:view'")
+                && v41.substring(admin41, manager41).contains("'discount:manage'"));
     }
 
     @Test
     void managerRole_lacksSystemConfigure_auditView_userDisable() throws Exception {
         List<String> manager = Permissions.forRole(Role.MANAGER);
-        assertEquals(24, manager.size());
+        assertEquals(26, manager.size());
         assertFalse(manager.contains(Permissions.SYSTEM_CONFIGURE));
         assertFalse(manager.contains(Permissions.AUDIT_VIEW));
         assertFalse(manager.contains(Permissions.USER_DISABLE));
         assertTrue(Permissions.ALL.containsAll(manager));
         assertEquals(Set.of("system:configure", "audit:view", "user:disable"), v6ManagerExclusions(v6()));
+        // D-6 for the B04 codes: a MANAGER holds both discount permissions, and V41 maps them to MANAGER explicitly
+        assertTrue(manager.contains(Permissions.DISCOUNT_VIEW));
+        assertTrue(manager.contains(Permissions.DISCOUNT_MANAGE));
+        String v41 = v41();
+        String managerBlock = v41.substring(v41.indexOf("WHERE r.name = 'MANAGER'"));
+        assertTrue(managerBlock.contains("'discount:view'") && managerBlock.contains("'discount:manage'"));
     }
 
     @Test
@@ -82,11 +106,14 @@ class PermissionsCatalogueTest {
         assertTrue(Permissions.forRole(Role.CUSTOMER).isEmpty());
         assertTrue(Permissions.forRole("anything-else").isEmpty());
         assertFalse(v6().contains("r.name = 'CUSTOMER'"), "V6 must not map any permission to CUSTOMER");
+        assertFalse(v41().contains("r.name = 'CUSTOMER'"), "V41 must not map any permission to CUSTOMER");
     }
 
     @Test
-    void v6Seed_matchesJavaCatalogue_noDrift() throws Exception {
-        assertEquals(Permissions.ALL, v6Catalogue(v6()));
+    void v6AndV41Seeds_matchJavaCatalogue_noDrift() throws Exception {
+        List<String> seeded = new ArrayList<>(v6Catalogue(v6()));
+        seeded.addAll(v6Catalogue(v41()));
+        assertEquals(Permissions.ALL, seeded);
     }
 
     @Test
@@ -94,7 +121,7 @@ class PermissionsCatalogueTest {
         Path root = Path.of("src/main/java");
         if (!Files.isDirectory(root)) return; // not run from the backend module directory
         Pattern literal = Pattern.compile("\"(" + String.join("|", "product", "category", "inventory", "order", "payment",
-                "return", "user", "analytics", "audit", "system") + "):[a-z_]+\"");
+                "return", "user", "analytics", "audit", "system", "discount") + "):[a-z_]+\"");
         List<String> offenders = new ArrayList<>();
         try (Stream<Path> files = Files.walk(root)) {
             for (Path file : files.filter(p -> p.toString().endsWith(".java")).toList()) {

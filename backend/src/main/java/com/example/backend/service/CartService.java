@@ -1,5 +1,6 @@
 package com.example.backend.service;
 
+import com.example.backend.dto.CartResponse;
 import com.example.backend.entity.Cart;
 import com.example.backend.entity.CartItem;
 import com.example.backend.entity.Product;
@@ -20,6 +21,11 @@ import java.util.Optional;
 /**
  * The server-side cart is the source of truth for authenticated users so the
  * same cart is visible across devices (laptop, phone, tablet, ...).
+ *
+ * <p>B04: every change takes the user's cart row lock ({@code CartRepository.findByUserIdForUpdate}), the same lock checkout
+ * holds, so a change cannot land between checkout reading the lines and clearing them. Reading a cart takes no lock and
+ * never creates a cart. A cart read is three statements for any number of lines: the cart, the lines with their products
+ * (one join), and the available quantities (one batched query).
  */
 @Service
 public class CartService {
@@ -40,10 +46,11 @@ public class CartService {
         return cartRepository.findByUserId(user.getId()).orElseGet(() -> createCartForUser(user));
     }
 
-    public List<CartItem> getItems(Long userId) {
-        Cart cart = cartRepository.findByUserId(userId)
-                .orElseThrow(() -> new ResourceNotFoundException("Không tìm thấy giỏ hàng của người dùng #" + userId));
-        return cartItemRepository.findByCartId(cart.getId());
+    /** The caller's cart. A user without a cart row gets an empty cart (nothing is written). */
+    @Transactional(readOnly = true)
+    public CartResponse getCart(Long userId) {
+        Optional<Cart> cart = cartRepository.findByUserId(userId);
+        return cart.isEmpty() ? CartResponse.empty() : snapshot(cart.get().getId());
     }
 
     /** Sellable quantity of every product in these cart items with ONE query (see ProductService.loadAvailability). */
@@ -51,14 +58,8 @@ public class CartService {
         return inventoryService.availableFor(items.stream().map(i -> i.getProduct().getId()).toList());
     }
 
-    public Long getCartId(Long userId) {
-        return cartRepository.findByUserId(userId)
-                .orElseThrow(() -> new ResourceNotFoundException("Không tìm thấy giỏ hàng của người dùng #" + userId))
-                .getId();
-    }
-
     @Transactional
-    public List<CartItem> addItem(User user, Long productId, int quantity) {
+    public CartResponse addItem(User user, Long productId, int quantity) {
         if (quantity <= 0) throw new BadRequestException("Số lượng thêm vào giỏ phải lớn hơn 0.");
 
         Product product = productService.getById(productId);
@@ -66,7 +67,7 @@ public class CartService {
             throw new BadRequestException("Sản phẩm này hiện không còn khả dụng.");
         }
 
-        Cart cart = getOrCreateCart(user);
+        Cart cart = cartRepository.findByUserIdForUpdate(user.getId()).orElseGet(() -> createCartForUser(user));
         Optional<CartItem> existing = cartItemRepository.findByCartIdAndProductId(cart.getId(), productId);
 
         int newQuantity = quantity + existing.map(CartItem::getQuantity).orElse(0);
@@ -84,16 +85,15 @@ public class CartService {
         item.setQuantity(newQuantity);
         cartItemRepository.save(item);
 
-        return cartItemRepository.findByCartId(cart.getId());
+        return snapshot(cart.getId());
     }
 
     @Transactional
-    public List<CartItem> updateQuantity(User user, Long cartItemId, int quantity) {
+    public CartResponse updateQuantity(User user, Long cartItemId, int quantity) {
         if (quantity <= 0) throw new BadRequestException("Số lượng phải lớn hơn 0.");
 
-        CartItem item = cartItemRepository.findById(cartItemId)
-                .orElseThrow(() -> new ResourceNotFoundException("Không tìm thấy sản phẩm trong giỏ hàng #" + cartItemId));
-        ensureOwnership(user, item);
+        cartRepository.findByUserIdForUpdate(user.getId());
+        CartItem item = loadOwnedItem(user, cartItemId);
 
         int available = inventoryService.available(item.getProduct().getId());
         if (quantity > available) {
@@ -101,22 +101,37 @@ public class CartService {
         }
         item.setQuantity(quantity);
         cartItemRepository.save(item);
-        return cartItemRepository.findByCartId(item.getCart().getId());
+        return snapshot(item.getCart().getId());
     }
 
     @Transactional
-    public List<CartItem> removeItem(User user, Long cartItemId) {
-        CartItem item = cartItemRepository.findById(cartItemId)
-                .orElseThrow(() -> new ResourceNotFoundException("Không tìm thấy sản phẩm trong giỏ hàng #" + cartItemId));
-        ensureOwnership(user, item);
+    public CartResponse removeItem(User user, Long cartItemId) {
+        cartRepository.findByUserIdForUpdate(user.getId());
+        CartItem item = loadOwnedItem(user, cartItemId);
         Long cartId = item.getCart().getId();
         cartItemRepository.delete(item);
-        return cartItemRepository.findByCartId(cartId);
+        return snapshot(cartId);
     }
 
+    /** Empties the caller's cart (the cart row itself stays). */
     @Transactional
-    public void clearCart(Long cartId) {
-        cartItemRepository.deleteAllByCartId(cartId);
+    public void clearCart(User user) {
+        cartRepository.findByUserIdForUpdate(user.getId())
+                .ifPresent(cart -> cartItemRepository.deleteAllByCartId(cart.getId()));
+    }
+
+    /** The line with its product and cart in one query; a line of another user is reported as not found. */
+    private CartItem loadOwnedItem(User user, Long cartItemId) {
+        CartItem item = cartItemRepository.findByIdWithProductAndCart(cartItemId)
+                .orElseThrow(() -> new ResourceNotFoundException("Không tìm thấy sản phẩm trong giỏ hàng #" + cartItemId));
+        ensureOwnership(user, item);
+        return item;
+    }
+
+    /** The cart as the API returns it: the lines with their products (one query) and the available quantities (one query). */
+    private CartResponse snapshot(Long cartId) {
+        List<CartItem> items = cartItemRepository.findByCartIdWithProduct(cartId);
+        return CartResponse.from(cartId, items, availabilityFor(items));
     }
 
     private void ensureOwnership(User user, CartItem item) {

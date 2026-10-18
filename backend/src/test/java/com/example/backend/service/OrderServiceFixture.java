@@ -6,8 +6,6 @@ import com.example.backend.entity.OrderStatus;
 import com.example.backend.entity.Payment;
 import com.example.backend.entity.Product;
 import com.example.backend.entity.User;
-import com.example.backend.repository.CartItemRepository;
-import com.example.backend.repository.CartRepository;
 import com.example.backend.repository.OrderItemRepository;
 import com.example.backend.repository.OrderRepository;
 import com.example.backend.repository.OrderStatusHistoryRepository;
@@ -32,8 +30,6 @@ final class OrderServiceFixture {
     final OrderRepository orders = mock(OrderRepository.class);
     final OrderItemRepository items = mock(OrderItemRepository.class);
     final OrderStatusHistoryRepository history = mock(OrderStatusHistoryRepository.class);
-    final CartRepository carts = mock(CartRepository.class);
-    final CartItemRepository cartItems = mock(CartItemRepository.class);
     final ProductRepository products = mock(ProductRepository.class);
     final PaymentRepository payments = mock(PaymentRepository.class);
     final UserRepository users = mock(UserRepository.class);
@@ -46,8 +42,6 @@ final class OrderServiceFixture {
         ReflectionTestUtils.setField(service, "orderRepository", orders);
         ReflectionTestUtils.setField(service, "orderItemRepository", items);
         ReflectionTestUtils.setField(service, "historyRepository", history);
-        ReflectionTestUtils.setField(service, "cartRepository", carts);
-        ReflectionTestUtils.setField(service, "cartItemRepository", cartItems);
         ReflectionTestUtils.setField(service, "productRepository", products);
         ReflectionTestUtils.setField(service, "paymentRepository", payments);
         ReflectionTestUtils.setField(service, "userRepository", users);

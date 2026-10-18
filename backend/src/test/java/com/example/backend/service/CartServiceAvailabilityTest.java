@@ -59,7 +59,7 @@ class CartServiceAvailabilityTest {
         product = new Product();
         product.setId(7L);
         ReflectionTestUtils.setField(product, "stockQuantity", 99); // frozen value: must be ignored
-        when(cartRepository.findByUserId(1L)).thenReturn(Optional.of(cart));
+        when(cartRepository.findByUserIdForUpdate(1L)).thenReturn(Optional.of(cart));
         when(productService.getById(7L)).thenReturn(product);
         when(cartItemRepository.findByCartIdAndProductId(50L, 7L)).thenReturn(Optional.empty());
     }
@@ -103,7 +103,7 @@ class CartServiceAvailabilityTest {
         item.setCart(cart);
         item.setProduct(product);
         item.setQuantity(1);
-        when(cartItemRepository.findById(10L)).thenReturn(Optional.of(item));
+        when(cartItemRepository.findByIdWithProductAndCart(10L)).thenReturn(Optional.of(item));
         when(inventoryService.available(7L)).thenReturn(1);
 
         BadRequestException ex = assertThrows(BadRequestException.class, () -> service.updateQuantity(user, 10L, 2));

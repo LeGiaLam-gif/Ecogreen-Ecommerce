@@ -1,7 +1,14 @@
 import http from './http';
 
-// Legacy checkout stays on /api/orders (B05 keeps POST /api/orders; B03 replaces it).
-export const checkout = (orderData) => http.post('/orders', orderData).then((res) => res.data);
+// B04 checkout (see docs/ai/contracts/B04-checkout.md). The body carries only the address (addressId OR customerName /
+// customerPhone / shippingAddress), an optional discountCode and the paymentMethod - never a price or a total.
+// Resolves to the created order (same shape as getOrderById).
+export const checkout = (payload) => http.post('/v1/checkout', payload).then((res) => res.data);
+
+// The server's numbers for the cart: { items[], subtotal, discountAmount, shippingFee, total, issues[] }. Writes nothing.
+// `signal` (an AbortSignal) lets the caller drop a stale request.
+export const previewCheckout = (discountCode, signal) =>
+  http.post('/v1/checkout/preview', discountCode ? { discountCode } : {}, { signal }).then((res) => res.data);
 
 // /api/v1 endpoints (see docs/ai/contracts/B05-order.md). Lists resolve to { items, meta }.
 export const getMyOrders = ({ page = 0, size = 20, status } = {}) =>

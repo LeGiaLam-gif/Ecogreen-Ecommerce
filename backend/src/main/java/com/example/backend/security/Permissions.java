@@ -50,7 +50,11 @@ public final class Permissions {
     public static final String AUDIT_VIEW = "audit:view";
     public static final String SYSTEM_CONFIGURE = "system:configure";
 
-    /** Every permission code, in catalogue order. */
+    /** B04: discount codes (admin API). Seeded by V41__discount_permissions.sql, not by V6. */
+    public static final String DISCOUNT_VIEW = "discount:view";
+    public static final String DISCOUNT_MANAGE = "discount:manage";
+
+    /** Every permission code, in catalogue order (V6 first, then V41). */
     public static final List<String> ALL = List.of(
             PRODUCT_VIEW, PRODUCT_CREATE, PRODUCT_UPDATE, PRODUCT_DELETE, PRODUCT_PUBLISH,
             CATEGORY_VIEW, CATEGORY_CREATE, CATEGORY_UPDATE, CATEGORY_DELETE,
@@ -59,7 +63,8 @@ public final class Permissions {
             PAYMENT_VIEW, PAYMENT_CONFIRM, PAYMENT_REFUND,
             RETURN_VIEW, RETURN_PROCESS,
             USER_VIEW, USER_UPDATE, USER_DISABLE,
-            ANALYTICS_VIEW, AUDIT_VIEW, SYSTEM_CONFIGURE);
+            ANALYTICS_VIEW, AUDIT_VIEW, SYSTEM_CONFIGURE,
+            DISCOUNT_VIEW, DISCOUNT_MANAGE);
 
     /** Owner decision D-6: a MANAGER has everything except these. */
     public static final Set<String> MANAGER_EXCLUDED = Set.of(SYSTEM_CONFIGURE, AUDIT_VIEW, USER_DISABLE);

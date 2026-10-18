@@ -19,9 +19,9 @@ admin area to keep the catalogue up to date, move orders through their statuses,
 
 - Browse products, filter by category and search by keyword. Search, filtering and paging are done by the server (`GET /api/v1/products`, 12 per page with "load more", 300 ms debounce while typing); a keyword matches name and description.
 - Product detail page (by id or slug) with an image gallery and a struck-through compare price when the product has one.
-- Server-side shopping cart with stock checks.
-- Checkout with recipient name, phone and delivery address.
-- Address book (`/account/addresses`): up to 10 saved addresses, one default, add / edit / delete / set default. Checkout does not use it yet (planned in B04).
+- Server-side shopping cart with stock checks (`/api/v1/cart`); each line shows the quantity still available.
+- Checkout (`/checkout`): pick a saved address or type the recipient, enter an optional discount code, and see the server-computed breakdown (items, discount, shipping, total) before confirming. Shipping is a flat fee below a free-shipping threshold.
+- Address book (`/account/addresses`): up to 10 saved addresses, one default, add / edit / delete / set default. Checkout offers these addresses (the default is preselected).
 - Choose a payment method — cash on delivery, VietQR, MoMo or VNPAY — and confirm payment on a simulated payment page
   (QR codes are displayed, but no money moves and no external service is called).
 - Order history and order detail with a status timeline; an unpaid order can be cancelled by its owner.
@@ -44,7 +44,7 @@ the database), but today every admin endpoint and the admin UI still require the
 
 ### What is not included
 
-Real payment gateway and webhooks, discounts and shipping cost,
+Real payment gateway and webhooks, an admin screen for discount codes (the API exists),
 notifications,
 analytics events, audit log, Docker images for the app, CI pipeline, frontend tests. The planned work is described in
 [`docs/ai/MODULE_SPECS.md`](./docs/ai/MODULE_SPECS.md).
@@ -63,7 +63,7 @@ Spring Boot REST API (:8081) ──► PostgreSQL
    token automatically when it expires.
 3. The backend decides what each caller may do (roles and permissions come from the token, ownership is checked per order);
    the frontend only hides buttons.
-4. Checkout is one database transaction: validate stock → create the order (`PENDING_PAYMENT`) with a snapshot of the current
+4. Checkout is one database transaction: lock the cart → validate stock, discount and shipping → create the order (`PENDING_PAYMENT`) with a snapshot of the current
    prices → reserve stock → record the first status-history row → create a pending payment → empty the cart. Afterwards every
    status change goes through one validated state machine.
 
@@ -162,8 +162,10 @@ for f in $(ls backend/src/main/resources/db/migration/V*.sql | sort -V); do
 done
 ```
 
-On Windows, run the same files one by one with `psql ... -f <file>` in the order V2, V3, V4, V5, V6, V10, V11, V12, V20, V21, V22, V30, V31, V70.
+On Windows, run the same files one by one with `psql ... -f <file>` in the order V2, V3, V4, V5, V6, V10, V11, V12, V20, V21, V22, V30, V31, V40, V41, V70.
 `V5` renames the legacy `USER` role to `CUSTOMER` and `V6` seeds the permission catalogue and the role → permission mapping. Without them, the roles and permissions are incomplete.
+
+`V40` creates the `discounts` table and `V41` seeds the `discount:view` / `discount:manage` permissions for `ADMIN` and `MANAGER` (Flyway is not active; apply by hand).
 
 `V10`–`V12` add the catalogue columns, the product image table and the category tree (load `database/seed-data.sql` before them). Uploaded product images are stored in the directory given by `UPLOAD_DIR` (default `./uploads`, not committed).
 
