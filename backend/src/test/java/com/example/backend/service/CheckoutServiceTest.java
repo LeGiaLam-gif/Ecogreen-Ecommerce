@@ -349,7 +349,7 @@ class CheckoutServiceTest {
     void checkout_unsupportedPaymentMethod_isRefusedBeforeTheCartIsEvenLocked() {
         defaultCart();
 
-        for (String method : new String[] {null, "", "  ", "PAYPAL", "VNPAY"}) {
+        for (String method : new String[] {null, "", "  ", "PAYPAL", "ZALOPAY"}) {
             assertThrows(BadRequestException.class, () -> service.checkout(USER, text(null, method)), String.valueOf(method));
         }
         verifyNoInteractions(carts, orderService, inventoryGateway, paymentService, events);
@@ -359,13 +359,13 @@ class CheckoutServiceTest {
     void checkout_acceptsTheSupportedMethods_inAnyCase() {
         defaultCart();
 
-        for (String method : new String[] {"cod", "COD", " VietQR ", "momo"}) {
+        for (String method : new String[] {"cod", "COD", " VietQR ", "momo", "vnpay"}) {
             service.checkout(USER, text(null, method));
         }
 
         ArgumentCaptor<String> methods = ArgumentCaptor.forClass(String.class);
-        verify(paymentService, org.mockito.Mockito.times(4)).createPendingPayment(any(Order.class), methods.capture());
-        assertEquals(List.of("COD", "COD", "VIETQR", "MOMO"), methods.getAllValues());
+        verify(paymentService, org.mockito.Mockito.times(5)).createPendingPayment(any(Order.class), methods.capture());
+        assertEquals(List.of("COD", "COD", "VIETQR", "MOMO", "VNPAY"), methods.getAllValues());
     }
 
     @Test

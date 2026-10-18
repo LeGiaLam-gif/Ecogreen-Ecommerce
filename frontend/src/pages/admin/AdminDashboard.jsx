@@ -6,6 +6,7 @@ import {
 } from '../../services/productApi';
 import { getAllCategories, createCategory, updateCategory, deleteCategory } from '../../services/categoryApi';
 import { listAdminOrders, changeOrderStatus } from '../../services/orderApi';
+import { getPaymentSummaries, confirmPayment, completeRefund } from '../../services/paymentApi';
 import { getOrdersByStatus } from '../../services/reportApi';
 import { ORDER_STATUS, ORDER_STATUS_KEYS, orderStatusInfo } from '../../utils/orderStatus';
 import { listAdminUsers, disableUser, enableUser, deleteUser } from '../../services/userApi';
@@ -44,12 +45,14 @@ const AdminDashboard = () => {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
   const navigate = useNavigate();
-  const { user, logout } = useAuth();
+  const { user, logout, hasPermission } = useAuth();
 
   // Dữ liệu chính
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [orders, setOrders] = useState([]);
+  // B06: payment + refund status of the orders on the page, by order id (admin API, payment:view).
+  const [paymentByOrder, setPaymentByOrder] = useState({});
   const [orderMeta, setOrderMeta] = useState({ page: 0, totalPages: 1, totalElements: 0 });
   const [orderPage, setOrderPage] = useState(0);
   const [orderCounts, setOrderCounts] = useState({});
@@ -100,6 +103,20 @@ const AdminDashboard = () => {
     return () => clearTimeout(t);
   }, [searchTerm]);
 
+  // The payment column is an extra: a failure here never blocks the order list.
+  const loadPaymentSummaries = async (pageOrders) => {
+    if (!hasPermission('payment:view') || pageOrders.length === 0) {
+      setPaymentByOrder({});
+      return;
+    }
+    try {
+      const rows = await getPaymentSummaries(pageOrders.map((o) => o.id));
+      setPaymentByOrder(Object.fromEntries(rows.map((r) => [r.orderId, r])));
+    } catch {
+      setPaymentByOrder({});
+    }
+  };
+
   const loadData = async () => {
     setLoading(true);
     setErrorMsg('');
@@ -138,6 +155,7 @@ const AdminDashboard = () => {
         setOrders(o.items);
         setOrderMeta(o.meta);
         setOrderCounts(counts);
+        await loadPaymentSummaries(o.items);
       } else if (activeTab === 'returns') {
         setReturns(await getAllReturns());
       }
@@ -295,6 +313,28 @@ const AdminDashboard = () => {
       loadData();
     } catch (e) {
       alert(e.friendlyMessage || 'Không thể cập nhật trạng thái đơn hàng.');
+    }
+  };
+
+  // --- Payments (B06) ---
+  const handleConfirmPayment = async (orderId) => {
+    if (!window.confirm(`Xác nhận đã nhận đủ tiền cho đơn hàng #${orderId}? Đơn hàng sẽ chuyển sang "Đã thanh toán".`)) return;
+    try {
+      await confirmPayment(orderId);
+      loadData();
+    } catch (e) {
+      alert(e.friendlyMessage || 'Không thể xác nhận thanh toán.');
+    }
+  };
+
+  const handleCompleteRefund = async (orderId) => {
+    const reference = prompt(`Mã giao dịch hoàn tiền cho đơn hàng #${orderId} (có thể để trống):`, '');
+    if (reference === null) return;
+    try {
+      await completeRefund(orderId, reference.trim());
+      loadData();
+    } catch (e) {
+      alert(e.friendlyMessage || 'Không thể hoàn tất hoàn tiền.');
     }
   };
 
@@ -906,6 +946,7 @@ const AdminDashboard = () => {
                       <th>Ngày đặt</th>
                       <th>Tổng tiền</th>
                       <th>Trạng thái hiện tại</th>
+                      <th>Thanh toán</th>
                       <th style={{ textAlign: 'center' }}>Cập nhật trạng thái</th>
                     </tr>
                   </thead>
@@ -929,6 +970,32 @@ const AdminDashboard = () => {
                             <span style={{ padding: '4px 10px', borderRadius: '12px', fontSize: '0.82rem', fontWeight: 600, backgroundColor: sInfo.bg, color: sInfo.color }}>
                               {sInfo.label}
                             </span>
+                          </td>
+                          <td>
+                            {(() => {
+                              const pay = paymentByOrder[o.id];
+                              if (!pay) return <span className="admin-cell-muted">—</span>;
+                              const canConfirm = (pay.paymentMethod === 'VIETQR' || pay.paymentMethod === 'MOMO')
+                                && pay.paymentStatus === 'PENDING' && o.status === 'PENDING_PAYMENT'
+                                && hasPermission('payment:confirm'); // UX only: the server checks the permission
+                              const canCompleteRefund = pay.refundStatus === 'PENDING' && hasPermission('payment:refund');
+                              return (
+                                <div>
+                                  <div>{pay.paymentMethod} · {pay.paymentStatus}</div>
+                                  {pay.refundStatus && <small className="admin-cell-muted">Hoàn tiền: {pay.refundStatus}</small>}
+                                  {canConfirm && (
+                                    <div>
+                                      <button type="button" onClick={() => handleConfirmPayment(o.id)}>Xác nhận đã nhận tiền</button>
+                                    </div>
+                                  )}
+                                  {canCompleteRefund && (
+                                    <div>
+                                      <button type="button" onClick={() => handleCompleteRefund(o.id)}>Hoàn tất hoàn tiền</button>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })()}
                           </td>
                           <td style={{ textAlign: 'center' }}>
                             {(o.allowedNextStatuses || []).length === 0 ? (

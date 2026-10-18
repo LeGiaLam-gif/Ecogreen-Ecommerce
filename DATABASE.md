@@ -20,6 +20,8 @@ PostgreSQL 16, database `ecogreen`. This document describes the schema that exis
 | `…/V31` | `inventory_transactions` (stock ledger, unique partial idempotency index) + one opening row per product |
 | `…/V40` | `discounts` (code unique on `upper(code)`, percent XOR amount, window and minimum CHECKs) |
 | `…/V41` | seeds `discount:view` and `discount:manage` and maps them to `ADMIN` and `MANAGER` |
+| `…/V50` | `payments`: `provider`, `paid_at`, `raw_response`; `chk_payments_status` widened to 5 values (every status CHECK on `payments` is looked up in `pg_constraint` and dropped first); unique partial index on `(provider, transaction_id)`; legacy `MOCK-…` rows back-filled with `provider = 'MOCK'` |
+| `…/V51` | `refunds` (owned by B06): FKs to `payments`, `orders`, `users`; status CHECK; unique partial index so an order has at most one non-`FAILED` refund |
 | `…/V70` | `addresses` (customer address book, FK to `users` `ON DELETE CASCADE`, partial unique index: one default per user) |
 | `DataLoader` (at startup) | makes sure the roles `CUSTOMER`, `MANAGER`, `ADMIN` exist |
 | Hibernate `ddl-auto=update` | creates missing tables/columns from the JPA entities in development |
@@ -84,7 +86,8 @@ products ── inventory (1:1, ON DELETE CASCADE)   products ─< inventory_tra
 | `orders` | `user_id`, snapshot of `customer_name`, `customer_phone`, `shipping_address`, `subtotal`, `discount_amount`, `shipping_fee` (default 0), `discount_code`, `total_price`, `status` (10 values: `PENDING_PAYMENT`, `PAID`, `PROCESSING`, `PACKED`, `SHIPPED`, `DELIVERED`, `CANCELLED`, `RETURN_REQUESTED`, `RETURNED`, `REFUNDED`; default `PENDING_PAYMENT`; `V20`). Indexes `(user_id, created_at DESC)` and `(status, created_at DESC)` (`V22`) |
 | `order_status_history` | `order_id` (`ON DELETE CASCADE`), `old_status` (null for the first row), `new_status`, `changed_by` (`ON DELETE SET NULL`), `note`, `changed_at`; index `(order_id, changed_at)` (`V21`) |
 | `order_items` | `order_id` (`ON DELETE CASCADE`), `product_id`, `quantity` (> 0), `price` = unit price **at purchase time** |
-| `payments` | `order_id`, `payment_method` (free text; the UI sends `COD`, `VIETQR`, `MOMO`, `VNPAY`), `amount`, `status` (`PENDING`, `SUCCESS`, `FAILED`), `transaction_id` (fake `MOCK-…` value). Simulated; no gateway |
+| `payments` | `order_id`, `payment_method` (`COD`, `VIETQR`, `MOMO`, `VNPAY`), `amount`, `status` (`PENDING`, `SUCCESS`, `FAILED`, `CANCELLED`, `REFUNDED`; `chk_payments_status`, `V50`), `provider` (`VNPAY`, `MOCK`; null without a gateway), `transaction_id` (the merchant reference of the CURRENT gateway attempt; replaced by every new attempt), `paid_at`, `raw_response` (write-only gateway payload, never returned by the API), `created_at`, `updated_at`. Unique partial index on `(provider, transaction_id)` where `transaction_id` is not null. Legacy mock rows (`MOCK-…`) were back-filled with `provider = 'MOCK'` |
+| `refunds` | `payment_id` (→ `payments`), `order_id` (→ `orders`), `amount` (`DECIMAL(12,2)`, the full payment), `status` (`PENDING`, `SUCCESS`, `FAILED`), `reason`, `provider_transaction_id` (bank reference entered by staff), `created_by` (→ `users`, `ON DELETE SET NULL`; null for the system), `created_at`, `refunded_at`. Unique partial index on `(order_id)` where `status <> 'FAILED'`: an order has at most one live refund. Created `PENDING` when a paid order is cancelled (`V51`; owned by B06) |
 | `return_requests` | `order_id`, `user_id`, `reason`, `description`, `image_url` (one link), `status` (`PENDING`, `APPROVED`, `REJECTED`), `admin_note` |
 
 ## Behaviour worth knowing

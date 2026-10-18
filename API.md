@@ -147,15 +147,22 @@ Invalid transitions return 400 `BUSINESS_RULE_VIOLATION`. Insufficient stock whe
 | GET | `/admin/orders` | `order:view_all` | filters `status`, `keyword`, `from`, `to` |
 | PATCH | `/admin/orders/{id}/status` | `order:update` (+ `order:cancel` for `CANCELLED`) | `{ newStatus, note? }` |
 
-## Payments — `/api/payments` (Owner or Admin)
+## Payments — `/api/v1` (B06)
 
-Payment is **simulated**; there is no gateway and no webhook.
+Online payment (`VNPAY`) is confirmed **only** by the provider's signed webhook; the browser returning from the gateway proves nothing. `COD` needs no payment step. `VIETQR` and `MOMO` are static QR codes with no confirmation signal, so staff confirm them. Order status changes only through the order state machine. Details and error codes: `docs/ai/contracts/B06-payment.md`.
 
-| Method | Path | Notes |
-|---|---|---|
-| GET | `/order/{orderId}` | payment of the order |
-| PUT | `/order/{orderId}/method` | `{ method }` (the UI offers `COD`, `VIETQR`, `MOMO`, `VNPAY`); rejected once paid |
-| POST | `/order/{orderId}/pay` | succeeds only for an order in `PENDING_PAYMENT` (rejected if cancelled or already past payment); stores a fake `MOCK-<uuid>` transaction id and moves the order to `PAID` through the order state machine |
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| POST | `/payments/{orderId}/initiate` | Owner | optional `{ returnUrl }` (ignored unless it starts with `ecogreen.payment.return-url`) → `{ redirectUrl, provider }`; order must be `PENDING_PAYMENT`, method `VNPAY`; every call creates a new transaction reference |
+| GET | `/payments/{orderId}` | Owner or `payment:view` | `{ id, orderId, paymentMethod, amount, status, transactionId, provider, paidAt, mockEnabled }`; the raw gateway response is never returned |
+| PUT | `/payments/{orderId}/method` | Owner | `{ method }` — `COD`, `VIETQR`, `MOMO`, `VNPAY`; only while the order is `PENDING_PAYMENT` and unpaid |
+| POST | `/payments/{orderId}/mock-pay` | Owner | **TEMPORARY-COMPAT(B06)**, development only: `{ outcome: SUCCESS\|FAILED }`; 400 unless `ecogreen.payment.mock-enabled=true` and the attempt used the mock provider |
+| GET, POST | `/payments/webhook/{provider}` | **Public** (no token; protected by the provider's signature) | `VNPAY` (IPN, query parameters) or `MOCK`. The ONE response that is not the envelope: HTTP 200 with the gateway's JSON `{ "RspCode", "Message" }` — `00` processed, `02` already processed, `01` unknown reference, `04` amount mismatch, `97` invalid signature, `99` could not record (the gateway should deliver again). Unknown provider: standard `404` |
+| GET | `/admin/payments?orderIds=1,2,…` | `payment:view` | up to 100 ids → `[{ orderId, paymentMethod, paymentStatus, amount, refundStatus }]` (the admin order list reads its page in one call) |
+| POST | `/admin/payments/{orderId}/confirm` | `payment:confirm` | optional `{ note }`; only for a `PENDING` `VIETQR` / `MOMO` payment → payment `SUCCESS`, order `PAID` |
+| POST | `/admin/payments/{orderId}/refund/complete` | `payment:refund` | optional `{ providerTransactionId }`; the order's `PENDING` refund → `SUCCESS`, payment → `REFUNDED`. There is no automatic gateway refund |
+
+Legacy `/api/payments/**` was removed: `GET /order/{id}` → `GET /payments/{id}`, `PUT /order/{id}/method` → `PUT /payments/{id}/method`, `POST /order/{id}/pay` → `POST /payments/{id}/initiate` (and `mock-pay` in development).
 
 ## Returns — `/api/returns`
 

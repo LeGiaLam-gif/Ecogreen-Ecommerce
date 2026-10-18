@@ -11,6 +11,7 @@ import Register from './pages/Register';
 import Cart from './pages/Cart';
 import Checkout from './pages/Checkout';
 import Payment from './pages/Payment';
+import PaymentReturn from './pages/PaymentReturn';
 import OrderSuccess from './pages/OrderSuccess';
 import Orders from './pages/Orders';
 import OrderDetail from './pages/OrderDetail';
@@ -51,6 +52,7 @@ function AppContent() {
           <Route path="/policy/returns" element={<ReturnPolicy />} />
 
           <Route path="/checkout" element={<ProtectedRoute><Checkout /></ProtectedRoute>} />
+          <Route path="/payment/return" element={<ProtectedRoute><PaymentReturn /></ProtectedRoute>} />
           <Route path="/payment/:orderId" element={<ProtectedRoute><Payment /></ProtectedRoute>} />
           <Route path="/order-success/:orderId" element={<ProtectedRoute><OrderSuccess /></ProtectedRoute>} />
           <Route path="/orders" element={<ProtectedRoute><Orders /></ProtectedRoute>} />

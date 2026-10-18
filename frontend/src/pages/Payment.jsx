@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
 import { getOrderById } from '../services/orderApi';
-import { getPaymentForOrder, payNow, updatePaymentMethod } from '../services/paymentApi';
+import { getPaymentForOrder, initiatePayment, updatePaymentMethod } from '../services/paymentApi';
+import MockPayButtons from '../components/MockPayButtons';
 import './Payment.css';
 
 // Thông tin tài khoản cửa hàng EcoGreen
@@ -67,7 +68,7 @@ const Payment = () => {
   const [payment, setPayment] = useState(null);
   const [selectedMethod, setSelectedMethod] = useState('VIETQR');
   const [loading, setLoading] = useState(true);
-  const [paying, setPaying] = useState(false);
+  const [busy, setBusy] = useState(false); // a request is in flight: every action is disabled
   const [error, setError] = useState('');
   const [copiedField, setCopiedField] = useState('');
   const [vietQrImgFailed, setVietQrImgFailed] = useState(false);
@@ -96,28 +97,42 @@ const Payment = () => {
   }, [orderId]); // eslint-disable-line
 
   const handleSelectMethod = async (methodId) => {
+    if (busy || methodId === selectedMethod) return;
+    const previous = selectedMethod;
     setSelectedMethod(methodId);
+    setBusy(true);
+    setError('');
     try {
-      await updatePaymentMethod(orderId, methodId);
+      setPayment(await updatePaymentMethod(orderId, methodId));
     } catch (err) {
-      console.warn('Could not sync payment method:', err);
+      setSelectedMethod(previous);
+      setError(err.friendlyMessage || 'Không thể đổi phương thức thanh toán.');
+    } finally {
+      setBusy(false);
     }
   };
 
-  const handlePay = async () => {
-    setPaying(true);
+  // VNPAY: the server creates a new transaction reference and the browser goes to the gateway. Coming back is not proof of
+  // payment: /payment/return asks the server for the real status.
+  const handleStartOnlinePayment = async () => {
+    setBusy(true);
     setError('');
     try {
-      try {
-        await updatePaymentMethod(orderId, selectedMethod);
-      } catch (ignored) {}
-      await payNow(orderId);
-      navigate(`/order-success/${orderId}`);
+      const { redirectUrl } = await initiatePayment(orderId, `${window.location.origin}/payment/return`);
+      window.location.assign(redirectUrl);
     } catch (err) {
-      setError(err.friendlyMessage || 'Thanh toán thất bại. Vui lòng thử lại.');
-    } finally {
-      setPaying(false);
+      setError(err.friendlyMessage || 'Không thể khởi tạo thanh toán. Vui lòng thử lại.');
+      setBusy(false);
     }
+  };
+
+  // COD needs no payment step: the order is already placed and is confirmed by the shop.
+  const handleConfirmCod = () => navigate(`/order-success/${orderId}`);
+
+  const handleMockDone = (updated) => {
+    setPayment(updated);
+    if (updated.status === 'SUCCESS') navigate(`/order-success/${orderId}`);
+    else load();
   };
 
   const copyToClipboard = (text, fieldName) => {
@@ -132,9 +147,13 @@ const Payment = () => {
   // Amount is totalPrice from order or payment amount
   const amount = payment?.amount ?? order?.totalPrice ?? 0;
   const transferContent = `ECOGREEN ${orderId}`;
-  const PAID_STATUSES = ['PAID', 'PROCESSING', 'PACKED', 'SHIPPED', 'DELIVERED'];
-  const alreadyPaid = payment?.status === 'SUCCESS' || PAID_STATUSES.includes(order?.status);
+  // The payment status comes from the server; the browser never infers "paid" from the order status.
+  const alreadyPaid = payment?.status === 'SUCCESS' || payment?.status === 'REFUNDED';
+  const paymentFailed = payment?.status === 'FAILED';
   const isCancelled = order?.status === 'CANCELLED';
+  const awaitingStaff = !alreadyPaid && !isCancelled && (selectedMethod === 'VIETQR' || selectedMethod === 'MOMO');
+  const showMock = selectedMethod === 'VNPAY' && payment?.mockEnabled && payment.provider === 'MOCK'
+    && payment.status === 'PENDING' && !isCancelled;
 
   // VietQR Deep link / image
   const vietQRUrl = `https://img.vietqr.io/image/${STORE_PAYMENT_CONFIG.bank.bankCode}-${STORE_PAYMENT_CONFIG.bank.accountNo}-compact2.jpg?amount=${amount}&addInfo=${encodeURIComponent(transferContent)}&accountName=${encodeURIComponent(STORE_PAYMENT_CONFIG.bank.accountName)}`;
@@ -154,7 +173,7 @@ const Payment = () => {
           <div className="pay-header-info">
             <h1 className="pay-heading">Thanh toán đơn hàng #{orderId}</h1>
             <span className="pay-order-status-badge">
-              {isCancelled ? '❌ ĐÃ HỦY' : alreadyPaid ? '✅ ĐÃ THANH TOÁN' : '⏳ CHỜ THANH TOÁN'}
+              {isCancelled ? '❌ ĐÃ HỦY' : alreadyPaid ? '✅ ĐÃ THANH TOÁN' : paymentFailed ? '❌ THANH TOÁN THẤT BẠI' : awaitingStaff ? '⏳ CHỜ CỬA HÀNG XÁC NHẬN' : '⏳ CHỜ THANH TOÁN'}
             </span>
           </div>
 
@@ -171,7 +190,7 @@ const Payment = () => {
                 key={m.id}
                 className={`pay-method-btn ${selectedMethod === m.id ? 'active' : ''}`}
                 onClick={() => handleSelectMethod(m.id)}
-                disabled={alreadyPaid}
+                disabled={alreadyPaid || isCancelled || busy}
                 type="button"
               >
                 <span className="pay-method-icon">{m.icon}</span>
@@ -197,18 +216,29 @@ const Payment = () => {
             <div className="pay-success-badge">
               🎉 Đơn hàng này đã thanh toán thành công!
             </div>
-          ) : (
+          ) : isCancelled ? null : selectedMethod === 'COD' ? (
             <button
-              className={`pay-confirm-btn ${selectedMethod === 'COD' ? 'pay-confirm-btn--cod' : ''}`}
-              onClick={handlePay}
-              disabled={paying}
+              className="pay-confirm-btn pay-confirm-btn--cod"
+              onClick={handleConfirmCod}
+              disabled={busy}
+              type="button"
             >
-              {paying
-                ? 'Đang xử lý giao dịch...'
-                : selectedMethod === 'COD'
-                ? '🚚 Xác nhận đặt hàng (Thanh toán COD)'
-                : '✅ Tôi đã hoàn tất chuyển khoản'}
+              🚚 Xác nhận đặt hàng (Thanh toán COD)
             </button>
+          ) : selectedMethod === 'VNPAY' ? (
+            <button
+              className="pay-confirm-btn"
+              onClick={handleStartOnlinePayment}
+              disabled={busy}
+              type="button"
+            >
+              {busy ? 'Đang chuyển đến cổng thanh toán...' : '💳 Thanh toán qua VNPAY'}
+            </button>
+          ) : (
+            <div className="pay-guide-note">
+              ⏳ <strong>Chờ cửa hàng xác nhận:</strong> sau khi bạn chuyển khoản, nhân viên EcoGreen sẽ kiểm tra và xác nhận đã nhận tiền.
+              Đơn hàng sẽ chuyển sang "Đã thanh toán" khi được xác nhận. <Link to={`/orders/${orderId}`}>Xem đơn hàng</Link>
+            </div>
           )}
 
           <div className="pay-security-guarantee">
@@ -308,7 +338,7 @@ const Payment = () => {
               </div>
 
               <div className="pay-guide-note">
-                💡 <strong>Lưu ý:</strong> Vui lòng giữ nguyên nội dung chuyển khoản <strong>{transferContent}</strong> để hệ thống EcoGreen tự động xác nhận đơn hàng của bạn.
+                💡 <strong>Lưu ý:</strong> Vui lòng giữ nguyên nội dung chuyển khoản <strong>{transferContent}</strong>. Cửa hàng sẽ xác nhận đơn hàng của bạn sau khi nhận được tiền.
               </div>
             </div>
           )}
@@ -397,44 +427,24 @@ const Payment = () => {
           {selectedMethod === 'VNPAY' && (
             <div className="pay-qr-card pay-qr-card--vnpay">
               <div className="qr-brand-header vnpay-header">
-                <span className="vnpay-brand-tag">💳 CỔNG VNPAY-QR</span>
+                <span className="vnpay-brand-tag">💳 CỔNG VNPAY</span>
                 <span className="vnpay-bank-support">40+ Ngân hàng liên kết</span>
               </div>
               <h3 className="pay-qr-title">Cổng thanh toán quốc gia VNPAY</h3>
-              <p className="pay-qr-sub">Hỗ trợ quét VNPAY-QR hoặc dùng thẻ ATM Nội địa / Thẻ Quốc tế (Visa, Master)</p>
-
-              <div className="qr-code-wrapper vnpay-qr-wrapper">
-                <div className="qr-svg-container vnpay-container">
-                  <QRCodeSVG
-                    value={`https://pay.vnpay.vn/pay?merchant=ECOGREEN&orderId=${orderId}&amount=${amount}`}
-                    size={200}
-                    level="H"
-                    fgColor="#005baa"
-                    includeMargin={true}
-                  />
-                  <div className="qr-center-logo vnpay-logo-center">VNPAY</div>
-                </div>
-                <div className="qr-scan-badge vnpay-badge">Cổng thanh toán đạt chuẩn PCI-DSS</div>
-              </div>
+              <p className="pay-qr-sub">Bạn sẽ được chuyển sang trang của VNPAY để quét VNPAY-QR hoặc dùng thẻ ATM nội địa / thẻ quốc tế (Visa, Master).</p>
 
               <div className="pay-details-table">
-                <div className="pay-detail-row">
-                  <span className="pay-detail-label">Đơn vị thụ hưởng:</span>
-                  <span className="pay-detail-value font-bold">{STORE_PAYMENT_CONFIG.vnpay.name}</span>
-                </div>
                 <div className="pay-detail-row highlight">
                   <span className="pay-detail-label">Số tiền thanh toán:</span>
                   <strong className="pay-detail-amount" style={{ color: '#005baa' }}>{fmtVND(amount)}</strong>
                 </div>
-                <div className="pay-detail-row">
-                  <span className="pay-detail-label">Mã giao dịch:</span>
-                  <span className="pay-detail-value font-bold">VNPAY_{orderId}</span>
-                </div>
               </div>
 
               <div className="pay-guide-note">
-                ℹ️ Bạn có thể quét mã QR bằng ứng dụng ngân hàng hoặc bấm nút <strong>"Xác nhận đã chuyển khoản"</strong> sau khi hoàn tất.
+                ℹ️ Sau khi thanh toán, bạn sẽ quay lại EcoGreen. Đơn hàng chỉ được xác nhận khi VNPAY báo kết quả về hệ thống.
               </div>
+
+              {showMock && <MockPayButtons orderId={orderId} onDone={handleMockDone} disabled={busy} />}
             </div>
           )}
 
