@@ -178,6 +178,20 @@ A customer returns items of a `DELIVERED` order with 1–5 photos; staff walk th
 
 Legacy `/api/returns/**` was removed: `POST /api/returns` → `POST /api/v1/returns` (multipart), `GET /api/returns/my` → `GET /api/v1/returns/my`, `GET /api/returns` → `GET /api/v1/admin/returns`, `PUT /api/returns/{id}/status { status, adminNote }` → `PATCH /api/v1/admin/returns/{id}/status { newStatus, adminNote }`.
 
+## Analytics and reports — `/api/v1/admin` (B09)
+
+All five endpoints are read-only and need `analytics:view` (401 without a token, 403 without the permission). Times in JSON are UTC ISO-8601; `from` / `to` of the events list are ISO-8601 instants **with an offset** (`2026-10-01T00:00:00Z`), those of the refund summary are plain dates. Events are recorded by listeners on the events other modules publish (after commit, never failing the business flow). Contract and the time-zone rule (D-9): [`docs/ai/contracts/B09-analytics.md`](./docs/ai/contracts/B09-analytics.md).
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/analytics/events` | Query: `type` (`order_created`, `payment_success`, `order_cancelled`, `return_created`, `return_status_changed`; anything else → 400 `VALIDATION_ERROR`), `from` / `to` (window `[from, to)`, default the last 30 days, at most 366 days), `page`, `size` (default 20, max 100), `sort` (`createdAt`, `id`, `eventType`; default `createdAt,desc`). Item: `{ id, eventType, userId, sessionId, payload, createdAt }`, `payload` is a flat object (no email, token, address or payment data) |
+| GET | `/reports/low-stock` | Query: `threshold` (default 10, 0..1,000,000), `page`, `size`. Item: `{ productId, productName, sku, available }`, lowest first. Read from the B03 `inventory` table, never `products.stock_quantity`; reserved / on-hand quantities stay in `/admin/inventory` |
+| GET | `/reports/pending-orders-count` | `{ status: "PENDING_PAYMENT", count }`. "Pending" = placed and waiting for payment; a `PAID` order is not pending |
+| GET | `/reports/refund-summary` | Query: `from`, `to` (dates `yyyy-MM-dd`, both inclusive, default the current month up to today, at most 366 days). `{ from, to, currency: "VND", items: [{ status, count, totalAmount }], totalAmount }`; `items` always lists `PENDING` and `SUCCESS` (zero-filled), `FAILED` is excluded; refunds are selected by `created_at`; amounts are `DECIMAL(12,2)` |
+| GET | `/reports/customer-frequency` | Query: `page`, `size`. Item: `{ userId, orderCount, totalSpent, firstOrderAt, lastOrderAt }` per customer, counting only revenue statuses (`PAID`, `PROCESSING`, `PACKED`, `SHIPPED`, `DELIVERED`, `RETURN_REQUESTED`); most orders first (fixed order, no `sort`); no name or email |
+
+The legacy revenue reports (`/api/admin/reports/revenue-over-time`, `orders-by-status`, `top-products`, `summary`) are unchanged and still ADMIN-only with bare JSON.
+
 ## Users and admin
 
 | Method | Path | Access | Notes |

@@ -23,6 +23,7 @@ PostgreSQL 16, database `ecogreen`. This document describes the schema that exis
 | `…/V50` | `payments`: `provider`, `paid_at`, `raw_response`; `chk_payments_status` widened to 5 values (every status CHECK on `payments` is looked up in `pg_constraint` and dropped first); unique partial index on `(provider, transaction_id)`; legacy `MOCK-…` rows back-filled with `provider = 'MOCK'` |
 | `…/V51` | `refunds` (owned by B06): FKs to `payments`, `orders`, `users`; status CHECK; unique partial index so an order has at most one non-`FAILED` refund |
 | `…/V70` | `addresses` (customer address book, FK to `users` `ON DELETE CASCADE`, partial unique index: one default per user) |
+| `…/V80` | `analytics_events` (B09): FK to `users` `ON DELETE SET NULL`, `chk_analytics_events_type_format` and `chk_analytics_events_payload_object` guarded by `pg_constraint`, index `(event_type, created_at)`. New table, no data touched |
 | `DataLoader` (at startup) | makes sure the roles `CUSTOMER`, `MANAGER`, `ADMIN` exist |
 | Hibernate `ddl-auto=update` | creates missing tables/columns from the JPA entities in development |
 
@@ -43,6 +44,7 @@ roles ─┬─< user_roles >─┬─ users ─┬─< refresh_tokens
                         │         └─< addresses (ON DELETE CASCADE)
 
 products ── inventory (1:1, ON DELETE CASCADE)   products ─< inventory_transactions (RESTRICT) >─ users (actor, SET NULL)
+users ─< analytics_events (SET NULL)
 ```
 
 ## Tables
@@ -93,6 +95,12 @@ products ── inventory (1:1, ON DELETE CASCADE)   products ─< inventory_tra
 | `return_items` | `return_id` (`ON DELETE CASCADE`), `order_item_id` (→ `order_items`), `quantity` (> 0); unique `(return_id, order_item_id)`. Legacy returns have no rows (whole-order requests) |
 | `return_status_history` | append-only trail of a return: `return_id` (`ON DELETE CASCADE`), `old_status` (null for the first row), `new_status`, `changed_by`, `note`, `changed_at`; index `(return_id, changed_at)` (`V60`). Legacy returns got one back-filled row |
 | `return_images` | `return_id` (`ON DELETE CASCADE`), `image_url` (500), `sort_order`. The legacy `image_url` was back-filled here |
+
+### Analytics (B09)
+
+| Table | Columns (key points) |
+|---|---|
+| `analytics_events` | append-only: `event_type` (≤ 50; lowercase snake_case enforced by `chk_analytics_events_type_format`; the list of valid types lives in `AnalyticsEventTypes`), `user_id` (→ `users`, `ON DELETE SET NULL`, nullable), `session_id` (≤ 100, nullable), `payload` (`JSONB`, nullable; a flat object, `chk_analytics_events_payload_object`), `created_at` (local time of the database zone). Index `(event_type, created_at)` (`V80`). Written only by `AnalyticsEventService`; reports never write other tables |
 
 ## Behaviour worth knowing
 

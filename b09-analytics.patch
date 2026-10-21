@@ -1,0 +1,2665 @@
+diff --git a/API.md b/API.md
+index 1dc8313..d5b61e4 100644
+--- a/API.md
++++ b/API.md
+@@ -178,6 +178,20 @@ A customer returns items of a `DELIVERED` order with 1–5 photos; staff walk th
+ 
+ Legacy `/api/returns/**` was removed: `POST /api/returns` → `POST /api/v1/returns` (multipart), `GET /api/returns/my` → `GET /api/v1/returns/my`, `GET /api/returns` → `GET /api/v1/admin/returns`, `PUT /api/returns/{id}/status { status, adminNote }` → `PATCH /api/v1/admin/returns/{id}/status { newStatus, adminNote }`.
+ 
++## Analytics and reports — `/api/v1/admin` (B09)
++
++All five endpoints are read-only and need `analytics:view` (401 without a token, 403 without the permission). Times in JSON are UTC ISO-8601; `from` / `to` of the events list are ISO-8601 instants **with an offset** (`2026-10-01T00:00:00Z`), those of the refund summary are plain dates. Events are recorded by listeners on the events other modules publish (after commit, never failing the business flow). Contract and the time-zone rule (D-9): [`docs/ai/contracts/B09-analytics.md`](./docs/ai/contracts/B09-analytics.md).
++
++| Method | Path | Notes |
++|---|---|---|
++| GET | `/analytics/events` | Query: `type` (`order_created`, `payment_success`, `order_cancelled`, `return_created`, `return_status_changed`; anything else → 400 `VALIDATION_ERROR`), `from` / `to` (window `[from, to)`, default the last 30 days, at most 366 days), `page`, `size` (default 20, max 100), `sort` (`createdAt`, `id`, `eventType`; default `createdAt,desc`). Item: `{ id, eventType, userId, sessionId, payload, createdAt }`, `payload` is a flat object (no email, token, address or payment data) |
++| GET | `/reports/low-stock` | Query: `threshold` (default 10, 0..1,000,000), `page`, `size`. Item: `{ productId, productName, sku, available }`, lowest first. Read from the B03 `inventory` table, never `products.stock_quantity`; reserved / on-hand quantities stay in `/admin/inventory` |
++| GET | `/reports/pending-orders-count` | `{ status: "PENDING_PAYMENT", count }`. "Pending" = placed and waiting for payment; a `PAID` order is not pending |
++| GET | `/reports/refund-summary` | Query: `from`, `to` (dates `yyyy-MM-dd`, both inclusive, default the current month up to today, at most 366 days). `{ from, to, currency: "VND", items: [{ status, count, totalAmount }], totalAmount }`; `items` always lists `PENDING` and `SUCCESS` (zero-filled), `FAILED` is excluded; refunds are selected by `created_at`; amounts are `DECIMAL(12,2)` |
++| GET | `/reports/customer-frequency` | Query: `page`, `size`. Item: `{ userId, orderCount, totalSpent, firstOrderAt, lastOrderAt }` per customer, counting only revenue statuses (`PAID`, `PROCESSING`, `PACKED`, `SHIPPED`, `DELIVERED`, `RETURN_REQUESTED`); most orders first (fixed order, no `sort`); no name or email |
++
++The legacy revenue reports (`/api/admin/reports/revenue-over-time`, `orders-by-status`, `top-products`, `summary`) are unchanged and still ADMIN-only with bare JSON.
++
+ ## Users and admin
+ 
+ | Method | Path | Access | Notes |
+diff --git a/DATABASE.md b/DATABASE.md
+index 0bc3f91..239c2c2 100644
+--- a/DATABASE.md
++++ b/DATABASE.md
+@@ -23,6 +23,7 @@ PostgreSQL 16, database `ecogreen`. This document describes the schema that exis
+ | `…/V50` | `payments`: `provider`, `paid_at`, `raw_response`; `chk_payments_status` widened to 5 values (every status CHECK on `payments` is looked up in `pg_constraint` and dropped first); unique partial index on `(provider, transaction_id)`; legacy `MOCK-…` rows back-filled with `provider = 'MOCK'` |
+ | `…/V51` | `refunds` (owned by B06): FKs to `payments`, `orders`, `users`; status CHECK; unique partial index so an order has at most one non-`FAILED` refund |
+ | `…/V70` | `addresses` (customer address book, FK to `users` `ON DELETE CASCADE`, partial unique index: one default per user) |
++| `…/V80` | `analytics_events` (B09): FK to `users` `ON DELETE SET NULL`, `chk_analytics_events_type_format` and `chk_analytics_events_payload_object` guarded by `pg_constraint`, index `(event_type, created_at)`. New table, no data touched |
+ | `DataLoader` (at startup) | makes sure the roles `CUSTOMER`, `MANAGER`, `ADMIN` exist |
+ | Hibernate `ddl-auto=update` | creates missing tables/columns from the JPA entities in development |
+ 
+@@ -43,6 +44,7 @@ roles ─┬─< user_roles >─┬─ users ─┬─< refresh_tokens
+                         │         └─< addresses (ON DELETE CASCADE)
+ 
+ products ── inventory (1:1, ON DELETE CASCADE)   products ─< inventory_transactions (RESTRICT) >─ users (actor, SET NULL)
++users ─< analytics_events (SET NULL)
+ ```
+ 
+ ## Tables
+@@ -94,6 +96,12 @@ products ── inventory (1:1, ON DELETE CASCADE)   products ─< inventory_tra
+ | `return_status_history` | append-only trail of a return: `return_id` (`ON DELETE CASCADE`), `old_status` (null for the first row), `new_status`, `changed_by`, `note`, `changed_at`; index `(return_id, changed_at)` (`V60`). Legacy returns got one back-filled row |
+ | `return_images` | `return_id` (`ON DELETE CASCADE`), `image_url` (500), `sort_order`. The legacy `image_url` was back-filled here |
+ 
++### Analytics (B09)
++
++| Table | Columns (key points) |
++|---|---|
++| `analytics_events` | append-only: `event_type` (≤ 50; lowercase snake_case enforced by `chk_analytics_events_type_format`; the list of valid types lives in `AnalyticsEventTypes`), `user_id` (→ `users`, `ON DELETE SET NULL`, nullable), `session_id` (≤ 100, nullable), `payload` (`JSONB`, nullable; a flat object, `chk_analytics_events_payload_object`), `created_at` (local time of the database zone). Index `(event_type, created_at)` (`V80`). Written only by `AnalyticsEventService`; reports never write other tables |
++
+ ## Behaviour worth knowing
+ 
+ - **Stock:** lives in `inventory` (on hand / reserved) with a ledger; an order reserves stock, payment commits it, cancellation releases or restocks it (B05 state machine). `products.stock_quantity` is **frozen** (never read or written; removal planned in B13) — any script or report that still reads it is stale. Returned goods are restocked when a return reaches `RETURNED` (B07, ledger `reference_type = 'RETURN'`). Orders cancelled before B05's cutover were never restocked; V30 has a read-only diagnostic for them.
+diff --git a/backend/src/main/java/com/example/backend/controller/AdminAnalyticsV1Controller.java b/backend/src/main/java/com/example/backend/controller/AdminAnalyticsV1Controller.java
+new file mode 100644
+index 0000000..d2da226
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/controller/AdminAnalyticsV1Controller.java
+@@ -0,0 +1,43 @@
++package com.example.backend.controller;
++
++import com.example.backend.api.ApiResponse;
++import com.example.backend.api.PageResponse;
++import com.example.backend.dto.AnalyticsEventResponse;
++import com.example.backend.security.AuthGuard;
++import com.example.backend.security.Permissions;
++import com.example.backend.service.AnalyticsEventService;
++import jakarta.servlet.http.HttpServletRequest;
++import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.web.bind.annotation.GetMapping;
++import org.springframework.web.bind.annotation.RequestMapping;
++import org.springframework.web.bind.annotation.RequestParam;
++import org.springframework.web.bind.annotation.RestController;
++
++import java.util.List;
++
++/** Admin read access to the recorded analytics events (B09). Read only: nothing here writes an event. */
++@RestController
++@RequestMapping("/api/v1/admin/analytics")
++public class AdminAnalyticsV1Controller {
++
++    @Autowired private AnalyticsEventService analyticsEventService;
++    @Autowired private AuthGuard authGuard;
++
++    /**
++     * Newest first by default. {@code type} must be a known event type (400 otherwise); {@code from} / {@code to} are
++     * ISO-8601 instants with an offset, window {@code [from, to)}, default the last 30 days, at most 366 days.
++     */
++    @GetMapping("/events")
++    public ApiResponse<List<AnalyticsEventResponse>> events(@RequestParam(required = false) String type,
++                                                            @RequestParam(required = false) String from,
++                                                            @RequestParam(required = false) String to,
++                                                            @RequestParam(required = false) Integer page,
++                                                            @RequestParam(required = false) Integer size,
++                                                            @RequestParam(required = false) String sort,
++                                                            HttpServletRequest request) {
++        authGuard.requirePermission(request, Permissions.ANALYTICS_VIEW);
++        return PageResponse.of(
++                analyticsEventService.listEvents(type, from, to, AnalyticsEventService.pageable(page, size, sort)),
++                AnalyticsEventResponse::from);
++    }
++}
+diff --git a/backend/src/main/java/com/example/backend/controller/AdminReportV1Controller.java b/backend/src/main/java/com/example/backend/controller/AdminReportV1Controller.java
+new file mode 100644
+index 0000000..74dc297
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/controller/AdminReportV1Controller.java
+@@ -0,0 +1,76 @@
++package com.example.backend.controller;
++
++import com.example.backend.api.ApiResponse;
++import com.example.backend.api.PageResponse;
++import com.example.backend.dto.CustomerFrequencyResponse;
++import com.example.backend.dto.LowStockItemResponse;
++import com.example.backend.dto.PendingOrdersResponse;
++import com.example.backend.dto.RefundSummaryResponse;
++import com.example.backend.entity.OrderStatus;
++import com.example.backend.security.AuthGuard;
++import com.example.backend.security.Permissions;
++import com.example.backend.service.ReportService;
++import com.example.backend.service.ReportTime;
++import jakarta.servlet.http.HttpServletRequest;
++import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.web.bind.annotation.GetMapping;
++import org.springframework.web.bind.annotation.RequestMapping;
++import org.springframework.web.bind.annotation.RequestParam;
++import org.springframework.web.bind.annotation.RestController;
++
++import java.time.LocalDate;
++import java.util.List;
++
++/**
++ * The B09 admin reports on the new API convention. The legacy revenue reports stay in {@link StatsController}
++ * ({@code /api/admin/reports}, requireAdmin, bare JSON) until B12 migrates them; a separate controller keeps the two
++ * generations apart. Every endpoint needs {@code analytics:view}.
++ */
++@RestController
++@RequestMapping("/api/v1/admin/reports")
++public class AdminReportV1Controller {
++
++    @Autowired private ReportService reportService;
++    @Autowired private AuthGuard authGuard;
++
++    /** Products whose available quantity is at or below {@code threshold} (default 10, 0..1,000,000), lowest first. */
++    @GetMapping("/low-stock")
++    public ApiResponse<List<LowStockItemResponse>> lowStock(@RequestParam(required = false) Integer threshold,
++                                                            @RequestParam(required = false) Integer page,
++                                                            @RequestParam(required = false) Integer size,
++                                                            HttpServletRequest request) {
++        authGuard.requirePermission(request, Permissions.ANALYTICS_VIEW);
++        return PageResponse.of(
++                reportService.getLowStockProducts(threshold, ReportService.reportPageable(page, size)),
++                LowStockItemResponse::from);
++    }
++
++    @GetMapping("/pending-orders-count")
++    public ApiResponse<PendingOrdersResponse> pendingOrdersCount(HttpServletRequest request) {
++        authGuard.requirePermission(request, Permissions.ANALYTICS_VIEW);
++        return ApiResponse.of(new PendingOrdersResponse(
++                OrderStatus.PENDING_PAYMENT.name(), reportService.getPendingOrdersCount()));
++    }
++
++    /** {@code from} / {@code to}: ISO dates (yyyy-MM-dd), both inclusive; default the current month up to today. */
++    @GetMapping("/refund-summary")
++    public ApiResponse<RefundSummaryResponse> refundSummary(@RequestParam(required = false) String from,
++                                                            @RequestParam(required = false) String to,
++                                                            HttpServletRequest request) {
++        authGuard.requirePermission(request, Permissions.ANALYTICS_VIEW);
++        LocalDate start = from == null || from.isBlank() ? null : ReportTime.parseDate(from, "from");
++        LocalDate end = to == null || to.isBlank() ? null : ReportTime.parseDate(to, "to");
++        return ApiResponse.of(reportService.getRefundSummary(start, end));
++    }
++
++    /** Orders per customer (revenue statuses only), most orders first. No {@code sort} parameter: the order is fixed. */
++    @GetMapping("/customer-frequency")
++    public ApiResponse<List<CustomerFrequencyResponse>> customerFrequency(@RequestParam(required = false) Integer page,
++                                                                          @RequestParam(required = false) Integer size,
++                                                                          HttpServletRequest request) {
++        authGuard.requirePermission(request, Permissions.ANALYTICS_VIEW);
++        return PageResponse.of(
++                reportService.getCustomerPurchaseFrequency(ReportService.reportPageable(page, size)),
++                CustomerFrequencyResponse::from);
++    }
++}
+diff --git a/backend/src/main/java/com/example/backend/dto/AnalyticsEventResponse.java b/backend/src/main/java/com/example/backend/dto/AnalyticsEventResponse.java
+new file mode 100644
+index 0000000..f34598a
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/dto/AnalyticsEventResponse.java
+@@ -0,0 +1,23 @@
++package com.example.backend.dto;
++
++import com.example.backend.entity.AnalyticsEvent;
++import com.example.backend.service.AnalyticsPayloadJson;
++import com.example.backend.service.ReportTime;
++
++import java.time.Instant;
++import java.util.Map;
++
++/** One analytics event for the admin list. {@code createdAt} is a UTC instant; {@code payload} is a flat object. */
++public record AnalyticsEventResponse(
++        Long id,
++        String eventType,
++        Long userId,
++        String sessionId,
++        Map<String, Object> payload,
++        Instant createdAt) {
++
++    public static AnalyticsEventResponse from(AnalyticsEvent event) {
++        return new AnalyticsEventResponse(event.getId(), event.getEventType(), event.getUserId(), event.getSessionId(),
++                AnalyticsPayloadJson.read(event.getPayload()), ReportTime.toUtc(event.getCreatedAt()));
++    }
++}
+diff --git a/backend/src/main/java/com/example/backend/dto/CustomerFrequencyResponse.java b/backend/src/main/java/com/example/backend/dto/CustomerFrequencyResponse.java
+new file mode 100644
+index 0000000..7926fcd
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/dto/CustomerFrequencyResponse.java
+@@ -0,0 +1,18 @@
++package com.example.backend.dto;
++
++import com.example.backend.repository.OrderReportRepository.CustomerFrequencyRow;
++import com.example.backend.service.ReportTime;
++
++import java.math.BigDecimal;
++import java.time.Instant;
++
++/** Purchase frequency of one customer. No name or email on purpose: analytics:view must not expose personal data. */
++public record CustomerFrequencyResponse(Long userId, long orderCount, BigDecimal totalSpent,
++                                        Instant firstOrderAt, Instant lastOrderAt) {
++
++    public static CustomerFrequencyResponse from(CustomerFrequencyRow row) {
++        BigDecimal spent = row.getTotalSpent() == null ? BigDecimal.ZERO : row.getTotalSpent();
++        return new CustomerFrequencyResponse(row.getUserId(), row.getOrderCount() == null ? 0L : row.getOrderCount(),
++                spent, ReportTime.toUtc(row.getFirstOrderAt()), ReportTime.toUtc(row.getLastOrderAt()));
++    }
++}
+diff --git a/backend/src/main/java/com/example/backend/dto/LowStockItemResponse.java b/backend/src/main/java/com/example/backend/dto/LowStockItemResponse.java
+new file mode 100644
+index 0000000..daf3bb3
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/dto/LowStockItemResponse.java
+@@ -0,0 +1,15 @@
++package com.example.backend.dto;
++
++import com.example.backend.repository.InventoryRepository.InventoryRow;
++
++/**
++ * One low-stock product. It carries only the AVAILABLE quantity: on-hand and reserved stay in the
++ * {@code /api/v1/admin/inventory} responses (inventory:view), as the B03 contract requires.
++ */
++public record LowStockItemResponse(Long productId, String productName, String sku, int available) {
++
++    public static LowStockItemResponse from(InventoryRow row) {
++        return new LowStockItemResponse(row.getProductId(), row.getProductName(), row.getSku(),
++                row.getQuantityOnHand() - row.getReservedQuantity());
++    }
++}
+diff --git a/backend/src/main/java/com/example/backend/dto/PendingOrdersResponse.java b/backend/src/main/java/com/example/backend/dto/PendingOrdersResponse.java
+new file mode 100644
+index 0000000..a96aa45
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/dto/PendingOrdersResponse.java
+@@ -0,0 +1,5 @@
++package com.example.backend.dto;
++
++/** "Pending" means status PENDING_PAYMENT: the order was placed and is waiting for its payment. */
++public record PendingOrdersResponse(String status, long count) {
++}
+diff --git a/backend/src/main/java/com/example/backend/dto/RefundSummaryResponse.java b/backend/src/main/java/com/example/backend/dto/RefundSummaryResponse.java
+new file mode 100644
+index 0000000..1093c8a
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/dto/RefundSummaryResponse.java
+@@ -0,0 +1,16 @@
++package com.example.backend.dto;
++
++import java.math.BigDecimal;
++import java.time.LocalDate;
++import java.util.List;
++
++/**
++ * Refund totals for refunds created on the calendar days {@code from}..{@code to} (both inclusive, database zone), VND.
++ * {@code items} always lists PENDING and SUCCESS (zero-filled); FAILED refunds are not money owed or paid and are left out.
++ * {@code totalAmount} is the sum of the items.
++ */
++public record RefundSummaryResponse(LocalDate from, LocalDate to, String currency, List<Item> items, BigDecimal totalAmount) {
++
++    public record Item(String status, long count, BigDecimal totalAmount) {
++    }
++}
+diff --git a/backend/src/main/java/com/example/backend/entity/AnalyticsEvent.java b/backend/src/main/java/com/example/backend/entity/AnalyticsEvent.java
+new file mode 100644
+index 0000000..38cc9ca
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/entity/AnalyticsEvent.java
+@@ -0,0 +1,71 @@
++package com.example.backend.entity;
++
++import jakarta.persistence.*;
++import org.hibernate.annotations.JdbcTypeCode;
++import org.hibernate.type.SqlTypes;
++
++import java.time.LocalDateTime;
++
++/**
++ * One business event recorded for analytics (B09). Append-only: rows are inserted by {@code AnalyticsEventService} and never
++ * updated. B09 owns this table; it never writes to any other module's table.
++ *
++ * <p>{@code payload} is a flat JSON object stored as PostgreSQL {@code jsonb}; it is kept as text in Java so no JSON library
++ * is needed (see {@code AnalyticsPayloadJson}). {@code userId} is a plain id (no relation): the foreign key
++ * {@code fk_analytics_events_user ... ON DELETE SET NULL} lives in V80.
++ */
++@Entity
++@Table(name = "analytics_events",
++        indexes = @Index(name = "idx_analytics_events_type_created", columnList = "event_type, created_at"))
++public class AnalyticsEvent {
++
++    @Id
++    @GeneratedValue(strategy = GenerationType.IDENTITY)
++    private Long id;
++
++    @Column(name = "event_type", nullable = false, length = 50)
++    private String eventType;
++
++    @Column(name = "user_id")
++    private Long userId;
++
++    @Column(name = "session_id", length = 100)
++    private String sessionId;
++
++    @JdbcTypeCode(SqlTypes.JSON)
++    @Column(name = "payload", columnDefinition = "jsonb")
++    private String payload;
++
++    /** Local time of the JVM / database session zone (decision D-9), like every other timestamp column. */
++    @Column(name = "created_at", nullable = false, updatable = false)
++    private LocalDateTime createdAt;
++
++    protected AnalyticsEvent() {
++    }
++
++    public AnalyticsEvent(String eventType, Long userId, String sessionId, String payload) {
++        this.eventType = eventType;
++        this.userId = userId;
++        this.sessionId = sessionId;
++        this.payload = payload;
++    }
++
++    @PrePersist
++    protected void onCreate() {
++        if (createdAt == null) {
++            createdAt = LocalDateTime.now();
++        }
++    }
++
++    public Long getId() { return id; }
++
++    public String getEventType() { return eventType; }
++
++    public Long getUserId() { return userId; }
++
++    public String getSessionId() { return sessionId; }
++
++    public String getPayload() { return payload; }
++
++    public LocalDateTime getCreatedAt() { return createdAt; }
++}
+diff --git a/backend/src/main/java/com/example/backend/repository/AnalyticsEventRepository.java b/backend/src/main/java/com/example/backend/repository/AnalyticsEventRepository.java
+new file mode 100644
+index 0000000..8a4c15d
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/repository/AnalyticsEventRepository.java
+@@ -0,0 +1,25 @@
++package com.example.backend.repository;
++
++import com.example.backend.entity.AnalyticsEvent;
++import org.springframework.data.domain.Page;
++import org.springframework.data.domain.Pageable;
++import org.springframework.data.jpa.repository.JpaRepository;
++import org.springframework.data.jpa.repository.Query;
++import org.springframework.data.repository.query.Param;
++
++import java.time.LocalDateTime;
++
++public interface AnalyticsEventRepository extends JpaRepository<AnalyticsEvent, Long> {
++
++    /**
++     * Events of one type in {@code [from, to)}; backed by {@code idx_analytics_events_type_created (event_type, created_at)}.
++     * The order comes from the {@link Pageable} (whitelisted by the service), never from client text.
++     */
++    @Query("select e from AnalyticsEvent e where e.eventType = :type and e.createdAt >= :from and e.createdAt < :to")
++    Page<AnalyticsEvent> findByTypeInRange(@Param("type") String type, @Param("from") LocalDateTime from,
++                                           @Param("to") LocalDateTime to, Pageable pageable);
++
++    /** Events of every type in {@code [from, to)}. The service bounds the window (at most 366 days). */
++    @Query("select e from AnalyticsEvent e where e.createdAt >= :from and e.createdAt < :to")
++    Page<AnalyticsEvent> findInRange(@Param("from") LocalDateTime from, @Param("to") LocalDateTime to, Pageable pageable);
++}
+diff --git a/backend/src/main/java/com/example/backend/repository/OrderReportRepository.java b/backend/src/main/java/com/example/backend/repository/OrderReportRepository.java
+new file mode 100644
+index 0000000..ea7df12
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/repository/OrderReportRepository.java
+@@ -0,0 +1,58 @@
++package com.example.backend.repository;
++
++import com.example.backend.entity.Order;
++import com.example.backend.entity.OrderStatus;
++import org.springframework.data.domain.Page;
++import org.springframework.data.domain.Pageable;
++import org.springframework.data.jpa.repository.Query;
++import org.springframework.data.repository.Repository;
++import org.springframework.data.repository.query.Param;
++
++import java.math.BigDecimal;
++import java.time.LocalDateTime;
++import java.util.Collection;
++import java.util.Optional;
++
++/**
++ * READ-ONLY report queries over {@code orders} (B09). A separate interface on purpose: {@link OrderRepository} belongs to B05
++ * and is not edited here. It extends {@link Repository}, not JpaRepository, so no save/delete method exists on it.
++ */
++public interface OrderReportRepository extends Repository<Order, Long> {
++
++    /** One customer's purchase frequency; the aggregation runs in the database. */
++    interface CustomerFrequencyRow {
++        Long getUserId();
++
++        Long getOrderCount();
++
++        BigDecimal getTotalSpent();
++
++        LocalDateTime getFirstOrderAt();
++
++        LocalDateTime getLastOrderAt();
++    }
++
++    /** The owner and total of an order, read after commit by the analytics listener. */
++    interface OrderOwnerRow {
++        Long getUserId();
++
++        BigDecimal getTotalPrice();
++    }
++
++    long countByStatus(OrderStatus status);
++
++    /**
++     * Orders per customer, only orders whose status is in {@code statuses} (pass {@link OrderStatus#revenueStatuses()}).
++     * ONE grouped query plus one count query, whatever the number of customers (no N+1). {@code o.user.id} is the foreign
++     * key column, so no join is made. The order is fixed (most orders first, then user id) and no client text reaches it.
++     */
++    @Query(value = "select o.user.id as userId, count(o) as orderCount, sum(o.totalPrice) as totalSpent, "
++            + "min(o.createdAt) as firstOrderAt, max(o.createdAt) as lastOrderAt "
++            + "from Order o where o.status in :statuses group by o.user.id "
++            + "order by count(o) desc, o.user.id asc",
++            countQuery = "select count(distinct o.user.id) from Order o where o.status in :statuses")
++    Page<CustomerFrequencyRow> customerFrequency(@Param("statuses") Collection<OrderStatus> statuses, Pageable pageable);
++
++    @Query("select o.user.id as userId, o.totalPrice as totalPrice from Order o where o.id = :orderId")
++    Optional<OrderOwnerRow> findOwnerRow(@Param("orderId") Long orderId);
++}
+diff --git a/backend/src/main/java/com/example/backend/repository/RefundReportRepository.java b/backend/src/main/java/com/example/backend/repository/RefundReportRepository.java
+new file mode 100644
+index 0000000..21db4a3
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/repository/RefundReportRepository.java
+@@ -0,0 +1,33 @@
++package com.example.backend.repository;
++
++import com.example.backend.entity.Refund;
++import org.springframework.data.jpa.repository.Query;
++import org.springframework.data.repository.Repository;
++import org.springframework.data.repository.query.Param;
++
++import java.math.BigDecimal;
++import java.time.LocalDateTime;
++import java.util.Collection;
++import java.util.List;
++
++/** READ-ONLY report queries over {@code refunds} (B09). {@link RefundRepository} belongs to B06 and is not edited here. */
++public interface RefundReportRepository extends Repository<Refund, Long> {
++
++    /** One row per status that has at least one refund in the window. */
++    interface RefundTotalRow {
++        Refund.Status getStatus();
++
++        Long getRefundCount();
++
++        BigDecimal getTotalAmount();
++    }
++
++    /**
++     * Refund count and amount per status for refunds CREATED in {@code [from, to)}, only for the given statuses (pass the
++     * {@link Refund.Status} constants, never a literal). One grouped query.
++     */
++    @Query("select r.status as status, count(r) as refundCount, sum(r.amount) as totalAmount from Refund r "
++            + "where r.status in :statuses and r.createdAt >= :from and r.createdAt < :to group by r.status")
++    List<RefundTotalRow> totalsByStatus(@Param("statuses") Collection<Refund.Status> statuses,
++                                        @Param("from") LocalDateTime from, @Param("to") LocalDateTime to);
++}
+diff --git a/backend/src/main/java/com/example/backend/service/AnalyticsEventListener.java b/backend/src/main/java/com/example/backend/service/AnalyticsEventListener.java
+new file mode 100644
+index 0000000..7fba13e
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/service/AnalyticsEventListener.java
+@@ -0,0 +1,100 @@
++package com.example.backend.service;
++
++import com.example.backend.entity.OrderStatus;
++import com.example.backend.event.OrderCancelledEvent;
++import com.example.backend.event.OrderPlacedEvent;
++import com.example.backend.event.OrderStatusChangedEvent;
++import com.example.backend.event.ReturnCreatedEvent;
++import com.example.backend.event.ReturnStatusChangedEvent;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++import org.springframework.stereotype.Component;
++import org.springframework.transaction.event.TransactionPhase;
++import org.springframework.transaction.event.TransactionalEventListener;
++
++import java.util.LinkedHashMap;
++import java.util.Map;
++
++/**
++ * Turns the events other modules already publish into analytics rows (B09). Every listener runs AFTER_COMMIT, so a business
++ * transaction that rolled back is never recorded; the write itself happens in its own transaction inside
++ * {@link AnalyticsEventService}. No method here can throw: a failure is logged and the business flow is untouched.
++ *
++ * <p>Mapping (the event classes belong to the publishing modules and are not changed):
++ * {@code OrderPlacedEvent} -> order_created, {@code OrderStatusChangedEvent(newStatus=PAID)} -> payment_success,
++ * {@code OrderCancelledEvent} -> order_cancelled, {@code ReturnCreatedEvent} -> return_created,
++ * {@code ReturnStatusChangedEvent} -> return_status_changed.
++ */
++@Component
++public class AnalyticsEventListener {
++
++    private static final Logger log = LoggerFactory.getLogger(AnalyticsEventListener.class);
++
++    private final AnalyticsEventService analytics;
++
++    public AnalyticsEventListener(AnalyticsEventService analytics) {
++        this.analytics = analytics;
++    }
++
++    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
++    public void onOrderPlaced(OrderPlacedEvent event) {
++        safely("order_created", () -> {
++            Map<String, Object> payload = new LinkedHashMap<>();
++            payload.put("orderId", event.orderId());
++            payload.put("total", event.total());
++            analytics.track(AnalyticsEventTypes.ORDER_CREATED, event.userId(), null, payload);
++        });
++    }
++
++    /** Only the change to PAID is recorded (as payment_success); every other status change records nothing. */
++    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
++    public void onOrderStatusChanged(OrderStatusChangedEvent event) {
++        safely("payment_success", () -> {
++            if (event.newStatus() != OrderStatus.PAID) {
++                return;
++            }
++            Map<String, Object> payload = new LinkedHashMap<>();
++            payload.put("previousStatus", event.oldStatus());
++            analytics.trackForOrder(AnalyticsEventTypes.PAYMENT_SUCCESS, event.orderId(), payload);
++        });
++    }
++
++    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
++    public void onOrderCancelled(OrderCancelledEvent event) {
++        safely("order_cancelled", () -> {
++            Map<String, Object> payload = new LinkedHashMap<>();
++            payload.put("refundRequired", event.refundRequired());
++            analytics.trackForOrder(AnalyticsEventTypes.ORDER_CANCELLED, event.orderId(), payload);
++        });
++    }
++
++    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
++    public void onReturnCreated(ReturnCreatedEvent event) {
++        safely("return_created", () -> {
++            Map<String, Object> payload = new LinkedHashMap<>();
++            payload.put("returnId", event.returnId());
++            payload.put("orderId", event.orderId());
++            analytics.track(AnalyticsEventTypes.RETURN_CREATED, event.userId(), null, payload);
++        });
++    }
++
++    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
++    public void onReturnStatusChanged(ReturnStatusChangedEvent event) {
++        safely("return_status_changed", () -> {
++            Map<String, Object> payload = new LinkedHashMap<>();
++            payload.put("returnId", event.returnId());
++            payload.put("orderId", event.orderId());
++            payload.put("oldStatus", event.oldStatus());
++            payload.put("newStatus", event.newStatus());
++            analytics.track(AnalyticsEventTypes.RETURN_STATUS_CHANGED, null, null, payload);
++        });
++    }
++
++    private static void safely(String what, Runnable action) {
++        try {
++            action.run();
++        } catch (RuntimeException e) {
++            log.warn("Analytics listener for {} failed: {}", what, e.getClass().getSimpleName());
++        }
++    }
++}
+diff --git a/backend/src/main/java/com/example/backend/service/AnalyticsEventService.java b/backend/src/main/java/com/example/backend/service/AnalyticsEventService.java
+new file mode 100644
+index 0000000..d88da46
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/service/AnalyticsEventService.java
+@@ -0,0 +1,195 @@
++package com.example.backend.service;
++
++import com.example.backend.api.ApiPaging;
++import com.example.backend.entity.AnalyticsEvent;
++import com.example.backend.exception.BadRequestException;
++import com.example.backend.repository.AnalyticsEventRepository;
++import com.example.backend.repository.OrderReportRepository;
++import com.example.backend.repository.OrderReportRepository.OrderOwnerRow;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++import org.springframework.data.domain.Page;
++import org.springframework.data.domain.Pageable;
++import org.springframework.data.domain.Sort;
++import org.springframework.stereotype.Service;
++import org.springframework.transaction.PlatformTransactionManager;
++import org.springframework.transaction.TransactionDefinition;
++import org.springframework.transaction.annotation.Transactional;
++import org.springframework.transaction.support.TransactionTemplate;
++
++import java.time.LocalDateTime;
++import java.time.temporal.ChronoUnit;
++import java.util.LinkedHashMap;
++import java.util.List;
++import java.util.Locale;
++import java.util.Map;
++
++/**
++ * Records business events into {@code analytics_events} and lists them for the admin (B09). It only ever INSERTS into its
++ * own table; it reads other modules' tables but never writes them.
++ *
++ * <p>{@link #track} NEVER throws. The write runs in its own {@code REQUIRES_NEW} transaction created INSIDE the try block
++ * (a {@code @Transactional} method would let a commit failure escape its own catch), so a failing analytics write can
++ * neither fail nor roll back the business flow that triggered it.
++ */
++@Service
++public class AnalyticsEventService {
++
++    private static final Logger log = LoggerFactory.getLogger(AnalyticsEventService.class);
++
++    static final int MAX_SESSION_ID = 100;
++    static final int MAX_STRING_VALUE = 200;
++    static final int MAX_PAYLOAD_KEYS = 20;
++    static final int MAX_KEY_LENGTH = 40;
++    /** Default window of the events list when {@code from} is omitted. */
++    static final int DEFAULT_WINDOW_DAYS = 30;
++    /** Widest window the events list accepts, so a request cannot scan the whole table. */
++    static final int MAX_WINDOW_DAYS = 366;
++
++    /** A payload key containing any of these (case-insensitive) is dropped: no personal, credential or payment data. */
++    static final List<String> SENSITIVE_KEY_PARTS = List.of(
++            "email", "mail", "token", "password", "passwd", "secret", "address", "phone", "card", "cvv",
++            "authorization", "cookie", "signature", "bank");
++
++    private static final Map<String, String> SORT_FIELDS = Map.of(
++            "createdAt", "createdAt", "id", "id", "eventType", "eventType");
++
++    private final AnalyticsEventRepository repository;
++    private final OrderReportRepository orderReportRepository;
++    private final TransactionTemplate requiresNew;
++
++    public AnalyticsEventService(AnalyticsEventRepository repository, OrderReportRepository orderReportRepository,
++                                 PlatformTransactionManager transactionManager) {
++        this.repository = repository;
++        this.orderReportRepository = orderReportRepository;
++        TransactionTemplate template = new TransactionTemplate(transactionManager);
++        template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
++        this.requiresNew = template;
++    }
++
++    /**
++     * Records one event. Never throws: an unknown {@code eventType} is ignored (logged), and any failure while writing is
++     * logged without the payload. The payload is sanitised first (see {@link #sanitize}).
++     */
++    public void track(String eventType, Long userId, String sessionId, Map<String, Object> payload) {
++        try {
++            if (!AnalyticsEventTypes.isKnown(eventType)) {
++                log.warn("Analytics event ignored: unknown event type");
++                return;
++            }
++            AnalyticsEvent event = new AnalyticsEvent(eventType, userId, truncate(sessionId, MAX_SESSION_ID),
++                    AnalyticsPayloadJson.write(sanitize(payload)));
++            requiresNew.executeWithoutResult(status -> repository.save(event));
++        } catch (RuntimeException e) {
++            log.warn("Could not record analytics event {}: {}", eventType, e.getClass().getSimpleName());
++        }
++    }
++
++    /**
++     * Records an event about an order whose owner is not in the published event: reads the owner and the total (read only,
++     * own transaction), adds {@code orderId} and {@code orderTotal} to the payload and calls {@link #track}. Never throws;
++     * if the lookup fails the event is still recorded without a user.
++     */
++    public void trackForOrder(String eventType, Long orderId, Map<String, Object> payload) {
++        try {
++            Map<String, Object> merged = new LinkedHashMap<>();
++            merged.put("orderId", orderId);
++            if (payload != null) {
++                merged.putAll(payload);
++            }
++            Long userId = null;
++            try {
++                OrderOwnerRow owner = orderId == null ? null
++                        : requiresNew.execute(status -> orderReportRepository.findOwnerRow(orderId).orElse(null));
++                if (owner != null) {
++                    userId = owner.getUserId();
++                    merged.put("orderTotal", owner.getTotalPrice());
++                }
++            } catch (RuntimeException e) {
++                log.warn("Could not read order {} for analytics: {}", orderId, e.getClass().getSimpleName());
++            }
++            track(eventType, userId, null, merged);
++        } catch (RuntimeException e) {
++            log.warn("Could not record analytics event {}: {}", eventType, e.getClass().getSimpleName());
++        }
++    }
++
++    /**
++     * Keeps only flat, non-sensitive entries: the key is {@code [A-Za-z][A-Za-z0-9_]*} (at most 40 characters) and does not
++     * contain a sensitive word; the value is a String (cut to 200 characters), Boolean, Number or Enum. Nulls, nested
++     * values and everything else are dropped. At most 20 entries are kept.
++     */
++    static Map<String, Object> sanitize(Map<String, Object> payload) {
++        Map<String, Object> clean = new LinkedHashMap<>();
++        if (payload == null) {
++            return clean;
++        }
++        for (Map.Entry<String, Object> entry : payload.entrySet()) {
++            if (clean.size() >= MAX_PAYLOAD_KEYS) {
++                break;
++            }
++            String key = entry.getKey();
++            Object value = entry.getValue();
++            if (key == null || !key.matches("[A-Za-z][A-Za-z0-9_]{0," + (MAX_KEY_LENGTH - 1) + "}") || isSensitive(key)) {
++                continue;
++            }
++            if (value instanceof String s) {
++                clean.put(key, truncate(s, MAX_STRING_VALUE));
++            } else if (value instanceof Boolean || value instanceof Number || value instanceof Enum<?>) {
++                clean.put(key, value);
++            }
++        }
++        return clean;
++    }
++
++    private static boolean isSensitive(String key) {
++        String lower = key.toLowerCase(Locale.ROOT);
++        for (String part : SENSITIVE_KEY_PARTS) {
++            if (lower.contains(part)) {
++                return true;
++            }
++        }
++        return false;
++    }
++
++    private static String truncate(String value, int max) {
++        return value == null || value.length() <= max ? value : value.substring(0, max);
++    }
++
++    // ---------------------------------------------------------------
++    // Admin list
++    // ---------------------------------------------------------------
++
++    /** Page size is clamped by {@link ApiPaging} (default 20, at most 100); {@code sort} is whitelisted, default newest first. */
++    public static Pageable pageable(Integer page, Integer size, String sort) {
++        return ApiPaging.of(page, size, sort, SORT_FIELDS,
++                Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by(Sort.Direction.DESC, "id")));
++    }
++
++    /**
++     * Events in {@code [from, to)} (ISO-8601 with offset). {@code to} defaults to now and {@code from} to {@code to} minus
++     * 30 days. A blank {@code type} means every type; an unknown one is a 400 (VALIDATION_ERROR).
++     *
++     * @throws BadRequestException for an unknown type, an unparsable bound, {@code from} after {@code to}, or a window
++     *                             wider than 366 days
++     */
++    @Transactional(readOnly = true)
++    public Page<AnalyticsEvent> listEvents(String type, String from, String to, Pageable pageable) {
++        String wanted = type == null || type.isBlank() ? null : type.trim();
++        if (wanted != null && !AnalyticsEventTypes.isKnown(wanted)) {
++            throw new BadRequestException("Loại sự kiện không hợp lệ.");
++        }
++        LocalDateTime end = to == null || to.isBlank() ? LocalDateTime.now() : ReportTime.parseDateTime(to, "to");
++        LocalDateTime start = from == null || from.isBlank()
++                ? end.minusDays(DEFAULT_WINDOW_DAYS) : ReportTime.parseDateTime(from, "from");
++        if (start.isAfter(end)) {
++            throw new BadRequestException("Tham số from phải không sau to.");
++        }
++        if (ChronoUnit.DAYS.between(start, end) > MAX_WINDOW_DAYS) {
++            throw new BadRequestException("Khoảng thời gian tối đa là " + MAX_WINDOW_DAYS + " ngày.");
++        }
++        return wanted == null
++                ? repository.findInRange(start, end, pageable)
++                : repository.findByTypeInRange(wanted, start, end, pageable);
++    }
++}
+diff --git a/backend/src/main/java/com/example/backend/service/AnalyticsEventTypes.java b/backend/src/main/java/com/example/backend/service/AnalyticsEventTypes.java
+new file mode 100644
+index 0000000..fe10df8
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/service/AnalyticsEventTypes.java
+@@ -0,0 +1,28 @@
++package com.example.backend.service;
++
++import java.util.List;
++
++/**
++ * The whitelist of {@code analytics_events.event_type} values (B09): lowercase snake_case, one constant per event that
++ * something in the system really publishes today. {@code AnalyticsEventService.track} ignores any other value and the
++ * events endpoint rejects it with 400, so a typo can never create a new "type". Adding a type needs no DDL (V80 only
++ * checks the format), but it does need a publisher; see the contract for the events nobody publishes yet.
++ */
++public final class AnalyticsEventTypes {
++
++    public static final String ORDER_CREATED = "order_created";
++    public static final String PAYMENT_SUCCESS = "payment_success";
++    public static final String ORDER_CANCELLED = "order_cancelled";
++    public static final String RETURN_CREATED = "return_created";
++    public static final String RETURN_STATUS_CHANGED = "return_status_changed";
++
++    public static final List<String> ALL = List.of(
++            ORDER_CREATED, PAYMENT_SUCCESS, ORDER_CANCELLED, RETURN_CREATED, RETURN_STATUS_CHANGED);
++
++    private AnalyticsEventTypes() {
++    }
++
++    public static boolean isKnown(String type) {
++        return type != null && ALL.contains(type);
++    }
++}
+diff --git a/backend/src/main/java/com/example/backend/service/AnalyticsPayloadJson.java b/backend/src/main/java/com/example/backend/service/AnalyticsPayloadJson.java
+new file mode 100644
+index 0000000..0ef9a87
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/service/AnalyticsPayloadJson.java
+@@ -0,0 +1,235 @@
++package com.example.backend.service;
++
++import java.math.BigDecimal;
++import java.math.BigInteger;
++import java.util.LinkedHashMap;
++import java.util.Map;
++
++/**
++ * Writes and reads the FLAT JSON object kept in {@code analytics_events.payload}: string, number, boolean and null values
++ * only. A deliberately small reader/writer in the spirit of {@code ReturnItemsJson}: B09 needs no JSON library for a
++ * payload it builds itself, and a malformed stored value reads as an empty map instead of failing the list endpoint.
++ */
++public final class AnalyticsPayloadJson {
++
++    private AnalyticsPayloadJson() {
++    }
++
++    /** Serialises a map whose values are already sanitised (String, Boolean, Number, Enum); anything else is skipped. */
++    public static String write(Map<String, Object> payload) {
++        if (payload == null || payload.isEmpty()) {
++            return null;
++        }
++        StringBuilder sb = new StringBuilder("{");
++        boolean first = true;
++        for (Map.Entry<String, Object> entry : payload.entrySet()) {
++            String value = literal(entry.getValue());
++            if (entry.getKey() == null || value == null) {
++                continue;
++            }
++            if (!first) {
++                sb.append(',');
++            }
++            first = false;
++            appendString(sb, entry.getKey());
++            sb.append(':').append(value);
++        }
++        return first ? null : sb.append('}').toString();
++    }
++
++    private static String literal(Object value) {
++        if (value instanceof Boolean || value instanceof Integer || value instanceof Long
++                || value instanceof Short || value instanceof Byte || value instanceof BigInteger) {
++            return value.toString();
++        }
++        if (value instanceof BigDecimal d) {
++            return d.toPlainString();
++        }
++        if (value instanceof Number n) {
++            double d = n.doubleValue();
++            return Double.isFinite(d) ? new BigDecimal(n.toString()).toPlainString() : null;
++        }
++        if (value instanceof Enum<?> e) {
++            return quote(e.name());
++        }
++        if (value instanceof String s) {
++            return quote(s);
++        }
++        return null;
++    }
++
++    private static String quote(String text) {
++        StringBuilder sb = new StringBuilder();
++        appendString(sb, text);
++        return sb.toString();
++    }
++
++    private static void appendString(StringBuilder sb, String text) {
++        sb.append('"');
++        for (int i = 0; i < text.length(); i++) {
++            char c = text.charAt(i);
++            switch (c) {
++                case '"' -> sb.append("\\\"");
++                case '\\' -> sb.append("\\\\");
++                case '\n' -> sb.append("\\n");
++                case '\r' -> sb.append("\\r");
++                case '\t' -> sb.append("\\t");
++                default -> {
++                    if (c < 0x20) {
++                        sb.append(String.format("\\u%04x", (int) c));
++                    } else {
++                        sb.append(c);
++                    }
++                }
++            }
++        }
++        sb.append('"');
++    }
++
++    /** Reads a flat object; null, blank or malformed text gives an empty map. Never throws. */
++    public static Map<String, Object> read(String json) {
++        Map<String, Object> result = new LinkedHashMap<>();
++        if (json == null || json.isBlank()) {
++            return result;
++        }
++        try {
++            Reader reader = new Reader(json);
++            reader.readObject(result);
++            return result;
++        } catch (RuntimeException e) {
++            return new LinkedHashMap<>();
++        }
++    }
++
++    private static final class Reader {
++        private final String text;
++        private int pos;
++
++        Reader(String text) {
++            this.text = text;
++        }
++
++        void readObject(Map<String, Object> into) {
++            skipSpace();
++            expect('{');
++            skipSpace();
++            if (peek() == '}') {
++                pos++;
++                end();
++                return;
++            }
++            while (true) {
++                skipSpace();
++                String key = readString();
++                skipSpace();
++                expect(':');
++                skipSpace();
++                into.put(key, readValue());
++                skipSpace();
++                char c = next();
++                if (c == '}') {
++                    end();
++                    return;
++                }
++                if (c != ',') {
++                    throw new IllegalArgumentException("bad object");
++                }
++            }
++        }
++
++        private void end() {
++            skipSpace();
++            if (pos != text.length()) {
++                throw new IllegalArgumentException("trailing text");
++            }
++        }
++
++        private Object readValue() {
++            char c = peek();
++            if (c == '"') {
++                return readString();
++            }
++            if (text.startsWith("true", pos)) {
++                pos += 4;
++                return Boolean.TRUE;
++            }
++            if (text.startsWith("false", pos)) {
++                pos += 5;
++                return Boolean.FALSE;
++            }
++            if (text.startsWith("null", pos)) {
++                pos += 4;
++                return null;
++            }
++            int start = pos;
++            while (pos < text.length() && "+-.0123456789eE".indexOf(text.charAt(pos)) >= 0) {
++                pos++;
++            }
++            if (start == pos) {
++                throw new IllegalArgumentException("bad value");
++            }
++            BigDecimal number = new BigDecimal(text.substring(start, pos));
++            if (number.scale() <= 0 && number.precision() <= 18) {
++                return number.longValueExact();
++            }
++            return number;
++        }
++
++        private String readString() {
++            expect('"');
++            StringBuilder sb = new StringBuilder();
++            while (true) {
++                char c = next();
++                if (c == '"') {
++                    return sb.toString();
++                }
++                if (c != '\\') {
++                    sb.append(c);
++                    continue;
++                }
++                char e = next();
++                switch (e) {
++                    case '"', '\\', '/' -> sb.append(e);
++                    case 'n' -> sb.append('\n');
++                    case 'r' -> sb.append('\r');
++                    case 't' -> sb.append('\t');
++                    case 'b' -> sb.append('\b');
++                    case 'f' -> sb.append('\f');
++                    case 'u' -> {
++                        if (pos + 4 > text.length()) {
++                            throw new IllegalArgumentException("bad unicode escape");
++                        }
++                        sb.append((char) Integer.parseInt(text.substring(pos, pos + 4), 16));
++                        pos += 4;
++                    }
++                    default -> throw new IllegalArgumentException("bad escape");
++                }
++            }
++        }
++
++        private void skipSpace() {
++            while (pos < text.length() && Character.isWhitespace(text.charAt(pos))) {
++                pos++;
++            }
++        }
++
++        private char peek() {
++            if (pos >= text.length()) {
++                throw new IllegalArgumentException("unexpected end");
++            }
++            return text.charAt(pos);
++        }
++
++        private char next() {
++            char c = peek();
++            pos++;
++            return c;
++        }
++
++        private void expect(char c) {
++            if (next() != c) {
++                throw new IllegalArgumentException("expected " + c);
++            }
++        }
++    }
++}
+diff --git a/backend/src/main/java/com/example/backend/service/ReportService.java b/backend/src/main/java/com/example/backend/service/ReportService.java
+index 7ab3505..8cd917f 100644
+--- a/backend/src/main/java/com/example/backend/service/ReportService.java
++++ b/backend/src/main/java/com/example/backend/service/ReportService.java
+@@ -1,11 +1,24 @@
+ package com.example.backend.service;
+ 
++import com.example.backend.api.ApiPaging;
++import com.example.backend.dto.RefundSummaryResponse;
+ import com.example.backend.entity.OrderStatus;
++import com.example.backend.entity.Refund;
+ import com.example.backend.exception.BadRequestException;
++import com.example.backend.repository.InventoryRepository.InventoryRow;
+ import com.example.backend.repository.OrderItemRepository;
++import com.example.backend.repository.OrderReportRepository;
++import com.example.backend.repository.OrderReportRepository.CustomerFrequencyRow;
+ import com.example.backend.repository.OrderRepository;
++import com.example.backend.repository.RefundReportRepository;
++import com.example.backend.repository.RefundReportRepository.RefundTotalRow;
+ import com.example.backend.repository.UserRepository;
++import com.example.backend.service.inventory.InventoryAdminService;
+ import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.data.domain.Page;
++import org.springframework.data.domain.PageRequest;
++import org.springframework.data.domain.Pageable;
++import org.springframework.data.domain.Sort;
+ import org.springframework.stereotype.Service;
+ 
+ import java.math.BigDecimal;
+@@ -13,7 +26,9 @@ import java.time.LocalDate;
+ import java.time.LocalDateTime;
+ import java.time.YearMonth;
+ import java.time.format.DateTimeFormatter;
++import java.time.temporal.ChronoUnit;
+ import java.util.ArrayList;
++import java.util.EnumMap;
+ import java.util.LinkedHashMap;
+ import java.util.List;
+ import java.util.Map;
+@@ -39,6 +54,18 @@ public class ReportService {
+     private OrderItemRepository orderItemRepository;
+     @Autowired
+     private UserRepository userRepository;
++    // B09 (read only): inventory read side of B03, and report-only repositories over orders / refunds.
++    @Autowired
++    private InventoryAdminService inventoryAdminService;
++    @Autowired
++    private OrderReportRepository orderReportRepository;
++    @Autowired
++    private RefundReportRepository refundReportRepository;
++
++    /** The refund statuses the summary reports, in display order. FAILED is not money owed or paid, so it is left out. */
++    static final List<Refund.Status> REPORTED_REFUND_STATUSES = List.of(Refund.Status.PENDING, Refund.Status.SUCCESS);
++    /** Widest refund-summary window (days), so a request cannot scan the whole refunds table. */
++    static final int MAX_REFUND_WINDOW_DAYS = 366;
+ 
+     // ---------------------------------------------------------------
+     // Shared range parsing: "7d" | "30d" | "12m" -> start LocalDateTime
+@@ -201,4 +228,69 @@ public class ReportService {
+         summary.put("newCustomers", userRepository.countByCreatedAtGreaterThanEqual(from));
+         return summary;
+     }
++
++    // ---------------------------------------------------------------
++    // B09 extensions (read only; see docs/ai/contracts/B09-analytics.md)
++    // ---------------------------------------------------------------
++
++    /** Page size clamped by {@link ApiPaging} (default 20, max 100). The order is fixed in each query, so there is no sort. */
++    public static Pageable reportPageable(Integer page, Integer size) {
++        Pageable p = ApiPaging.of(page, size, null, java.util.Map.of(), Sort.unsorted());
++        return PageRequest.of(p.getPageNumber(), p.getPageSize());
++    }
++
++    /**
++     * Products whose AVAILABLE quantity (on hand - reserved, from the B03 {@code inventory} table) is at or below
++     * {@code threshold} (null = 10), lowest first. Reads through {@link InventoryAdminService}, never the frozen
++     * {@code products.stock_quantity}.
++     */
++    public Page<InventoryRow> getLowStockProducts(Integer threshold, Pageable pageable) {
++        return inventoryAdminService.list(null, true, threshold, pageable);
++    }
++
++    /** "Pending" = {@link OrderStatus#PENDING_PAYMENT}: placed, waiting for payment. PAID orders are not pending. */
++    public long getPendingOrdersCount() {
++        return orderReportRepository.countByStatus(OrderStatus.PENDING_PAYMENT);
++    }
++
++    /**
++     * Refund count and amount per status (PENDING, SUCCESS) for refunds created on the calendar days {@code from}..{@code to},
++     * both inclusive, in the database's local zone. Defaults: {@code to} = today, {@code from} = first day of that month.
++     */
++    public RefundSummaryResponse getRefundSummary(LocalDate from, LocalDate to) {
++        LocalDate end = to != null ? to : LocalDate.now(ReportTime.zone());
++        LocalDate start = from != null ? from : end.withDayOfMonth(1);
++        if (start.isAfter(end)) {
++            throw new BadRequestException("Tham số from phải không sau to.");
++        }
++        if (ChronoUnit.DAYS.between(start, end) > MAX_REFUND_WINDOW_DAYS) {
++            throw new BadRequestException("Khoảng thời gian tối đa là " + MAX_REFUND_WINDOW_DAYS + " ngày.");
++        }
++        List<RefundTotalRow> rows = refundReportRepository.totalsByStatus(
++                REPORTED_REFUND_STATUSES, start.atStartOfDay(), end.plusDays(1).atStartOfDay());
++        Map<Refund.Status, RefundTotalRow> byStatus = new EnumMap<>(Refund.Status.class);
++        for (RefundTotalRow row : rows) {
++            byStatus.put(row.getStatus(), row);
++        }
++        BigDecimal zero = BigDecimal.ZERO.setScale(2);
++        BigDecimal total = zero;
++        List<RefundSummaryResponse.Item> items = new ArrayList<>();
++        for (Refund.Status status : REPORTED_REFUND_STATUSES) {
++            RefundTotalRow row = byStatus.get(status);
++            long count = row == null || row.getRefundCount() == null ? 0L : row.getRefundCount();
++            BigDecimal amount = row == null || row.getTotalAmount() == null
++                    ? zero : row.getTotalAmount().setScale(2, java.math.RoundingMode.HALF_UP);
++            items.add(new RefundSummaryResponse.Item(status.name(), count, amount));
++            total = total.add(amount);
++        }
++        return new RefundSummaryResponse(start, end, "VND", items, total);
++    }
++
++    /**
++     * Orders per customer, counting only orders in {@link OrderStatus#revenueStatuses()}; most orders first. One grouped
++     * query in the database (no per-customer query).
++     */
++    public Page<CustomerFrequencyRow> getCustomerPurchaseFrequency(Pageable pageable) {
++        return orderReportRepository.customerFrequency(OrderStatus.revenueStatuses(), pageable);
++    }
+ }
+diff --git a/backend/src/main/java/com/example/backend/service/ReportTime.java b/backend/src/main/java/com/example/backend/service/ReportTime.java
+new file mode 100644
+index 0000000..68218ee
+--- /dev/null
++++ b/backend/src/main/java/com/example/backend/service/ReportTime.java
+@@ -0,0 +1,50 @@
++package com.example.backend.service;
++
++import com.example.backend.exception.BadRequestException;
++
++import java.time.Instant;
++import java.time.LocalDate;
++import java.time.LocalDateTime;
++import java.time.OffsetDateTime;
++import java.time.ZoneId;
++import java.time.format.DateTimeParseException;
++
++/**
++ * Time conversion for the B09 reports (open decision D-9). {@code timestamp} columns hold LOCAL time of the JVM / database
++ * session zone (today {@code Asia/Ho_Chi_Minh}, set in BackendApplication and in the datasource URL); the API speaks UTC
++ * ISO-8601. Request values are converted to that local zone before they reach a query, and response values are converted
++ * back to an {@link Instant}. The zone is the JVM default, so the code stays correct if D-9 is ever resolved by changing
++ * the zone in both places; it would NOT be correct if the JVM and the database session disagreed.
++ */
++public final class ReportTime {
++
++    private ReportTime() {
++    }
++
++    public static ZoneId zone() {
++        return ZoneId.systemDefault();
++    }
++
++    /** Parses an ISO-8601 date-time WITH offset ({@code 2026-10-01T00:00:00Z}) into the database's local time. */
++    public static LocalDateTime parseDateTime(String text, String field) {
++        try {
++            return OffsetDateTime.parse(text.trim()).atZoneSameInstant(zone()).toLocalDateTime();
++        } catch (DateTimeParseException | NullPointerException e) {
++            throw new BadRequestException("Tham số " + field + " phải là thời điểm ISO-8601 có múi giờ, ví dụ 2026-10-01T00:00:00Z.");
++        }
++    }
++
++    /** Parses an ISO date ({@code 2026-10-01}); the day is a calendar day in the database's local zone. */
++    public static LocalDate parseDate(String text, String field) {
++        try {
++            return LocalDate.parse(text.trim());
++        } catch (DateTimeParseException | NullPointerException e) {
++            throw new BadRequestException("Tham số " + field + " phải là ngày ISO-8601 (yyyy-MM-dd).");
++        }
++    }
++
++    /** A stored local timestamp as the UTC instant it represents. Null stays null. */
++    public static Instant toUtc(LocalDateTime local) {
++        return local == null ? null : local.atZone(zone()).toInstant();
++    }
++}
+diff --git a/backend/src/main/resources/db/migration/V80__analytics_events.sql b/backend/src/main/resources/db/migration/V80__analytics_events.sql
+new file mode 100644
+index 0000000..b8f4215
+--- /dev/null
++++ b/backend/src/main/resources/db/migration/V80__analytics_events.sql
+@@ -0,0 +1,65 @@
++-- B09: analytics_events. One row per business event worth counting later (order created, payment succeeded, order cancelled,
++-- return created / status changed). B09 owns this table and only ever INSERTS into it; it never writes another module's table.
++--
++-- LEGACY DATA IMPACT:        None. New table; no existing table or row is changed. Orders and returns that happened BEFORE
++--                            this module existed have no analytics row (events are recorded as they happen, not back-filled).
++-- NULLABILITY:               New table. id, event_type and created_at are NOT NULL. user_id is nullable (guest or system
++--                            events, and ON DELETE SET NULL when a user is deleted); session_id and payload are nullable.
++--                            Nothing needs a back-fill before a NOT NULL, because the table is empty.
++-- CONSTRAINT ORDER:          (1) create the table, (2) add the foreign key to users, the event_type format CHECK and the
++--                            payload CHECK, each guarded by a pg_constraint lookup, (3) create the index last. If
++--                            ddl-auto=update created the table first, the table may already hold rows: all rows written by
++--                            the application satisfy the CHECKs (lowercase snake_case type, flat JSON object payload).
++-- DATA-LOSS / ROLLBACK RISK: Dropping the table loses every recorded analytics event (history cannot be rebuilt). Manual
++--                            rollback:
++--                              DROP TABLE IF EXISTS analytics_events;
++-- EMPTY DATABASE:            Fine - needs users (created by init-postgres.sql); creates the empty table.
++-- EXISTING DATABASE:         Fine and idempotent - IF NOT EXISTS and guarded constraints. If ddl-auto=update created the
++--                            table from the AnalyticsEvent entity first, Hibernate did not add the foreign key or the two
++--                            CHECKs: this script adds them. The payload column is jsonb in both paths.
++--
++-- NOT EXECUTED against any real database: this file is applied by hand with psql (Flyway is not active), after V6.
++--
++-- WHY NO CHECK ON THE EVENT TYPE LIST: the list of valid types lives in one place, AnalyticsEventTypes (Java), so a new event
++-- needs no DDL. The database only enforces the FORMAT (lowercase snake_case).
++--
++-- INDEXES (each is backed by a real query):
++--   idx_analytics_events_type_created  (event_type, created_at)  <- GET /api/v1/admin/analytics/events?type=&from=&to=
++--
++-- VERIFICATION (read-only):
++--   SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = 'analytics_events' ORDER BY ordinal_position;
++--   SELECT conname, contype FROM pg_constraint WHERE conrelid = 'analytics_events'::regclass ORDER BY conname;
++--   SELECT indexdef FROM pg_indexes WHERE tablename = 'analytics_events';
++
++CREATE TABLE IF NOT EXISTS analytics_events (
++    id         BIGSERIAL   PRIMARY KEY,
++    event_type VARCHAR(50) NOT NULL,
++    user_id    BIGINT,
++    session_id VARCHAR(100),
++    payload    JSONB,
++    created_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP
++);
++
++DO $$
++BEGIN
++    IF NOT EXISTS (SELECT 1 FROM pg_constraint
++                    WHERE conrelid = 'analytics_events'::regclass AND conname = 'fk_analytics_events_user') THEN
++        ALTER TABLE analytics_events
++            ADD CONSTRAINT fk_analytics_events_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL;
++    END IF;
++
++    IF NOT EXISTS (SELECT 1 FROM pg_constraint
++                    WHERE conrelid = 'analytics_events'::regclass AND conname = 'chk_analytics_events_type_format') THEN
++        ALTER TABLE analytics_events
++            ADD CONSTRAINT chk_analytics_events_type_format CHECK (event_type ~ '^[a-z][a-z0-9_]*$');
++    END IF;
++
++    IF NOT EXISTS (SELECT 1 FROM pg_constraint
++                    WHERE conrelid = 'analytics_events'::regclass AND conname = 'chk_analytics_events_payload_object') THEN
++        ALTER TABLE analytics_events
++            ADD CONSTRAINT chk_analytics_events_payload_object CHECK (payload IS NULL OR jsonb_typeof(payload) = 'object');
++    END IF;
++END
++$$;
++
++CREATE INDEX IF NOT EXISTS idx_analytics_events_type_created ON analytics_events (event_type, created_at);
+diff --git a/backend/src/test/java/com/example/backend/controller/AdminAnalyticsReportControllerTest.java b/backend/src/test/java/com/example/backend/controller/AdminAnalyticsReportControllerTest.java
+new file mode 100644
+index 0000000..7d345a2
+--- /dev/null
++++ b/backend/src/test/java/com/example/backend/controller/AdminAnalyticsReportControllerTest.java
+@@ -0,0 +1,260 @@
++package com.example.backend.controller;
++
++import com.example.backend.dto.RefundSummaryResponse;
++import com.example.backend.entity.AnalyticsEvent;
++import com.example.backend.exception.BadRequestException;
++import com.example.backend.exception.GlobalExceptionHandler;
++import com.example.backend.repository.AnalyticsEventRepository;
++import com.example.backend.repository.InventoryRepository.InventoryRow;
++import com.example.backend.repository.OrderReportRepository;
++import com.example.backend.repository.OrderReportRepository.CustomerFrequencyRow;
++import com.example.backend.security.AuthGuard;
++import com.example.backend.security.AuthInterceptor;
++import com.example.backend.security.CurrentUser;
++import com.example.backend.security.Permissions;
++import com.example.backend.service.AnalyticsEventService;
++import com.example.backend.service.ReportService;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++import org.springframework.data.domain.PageImpl;
++import org.springframework.data.domain.Pageable;
++import org.springframework.test.util.ReflectionTestUtils;
++import org.springframework.test.web.servlet.MockMvc;
++import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
++import org.springframework.test.web.servlet.setup.MockMvcBuilders;
++import org.springframework.transaction.PlatformTransactionManager;
++
++import java.math.BigDecimal;
++import java.time.LocalDate;
++import java.time.LocalDateTime;
++import java.util.List;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.ArgumentMatchers.eq;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.never;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.when;
++import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
++import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
++import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
++
++/**
++ * B09 admin endpoints through the real GlobalExceptionHandler and the real AuthGuard (standalone MockMvc). The events
++ * endpoint uses the REAL AnalyticsEventService over a mocked repository, so type validation is the real code. The request
++ * attribute stands in for what AuthInterceptor sets from a verified token.
++ */
++class AdminAnalyticsReportControllerTest {
++
++    private AnalyticsEventRepository eventRepository;
++    private ReportService reportService;
++    private MockMvc mvc;
++
++    @BeforeEach
++    void setUp() {
++        eventRepository = mock(AnalyticsEventRepository.class);
++        AnalyticsEventService events = new AnalyticsEventService(eventRepository, mock(OrderReportRepository.class),
++                mock(PlatformTransactionManager.class));
++        reportService = mock(ReportService.class);
++
++        AdminAnalyticsV1Controller analytics = new AdminAnalyticsV1Controller();
++        ReflectionTestUtils.setField(analytics, "analyticsEventService", events);
++        ReflectionTestUtils.setField(analytics, "authGuard", new AuthGuard());
++
++        AdminReportV1Controller reports = new AdminReportV1Controller();
++        ReflectionTestUtils.setField(reports, "reportService", reportService);
++        ReflectionTestUtils.setField(reports, "authGuard", new AuthGuard());
++
++        mvc = MockMvcBuilders.standaloneSetup(analytics, reports).setControllerAdvice(new GlobalExceptionHandler()).build();
++
++        AnalyticsEvent event = new AnalyticsEvent("order_created", 9L, "s1", "{\"orderId\":5,\"total\":125000.00}");
++        ReflectionTestUtils.setField(event, "id", 1L);
++        ReflectionTestUtils.setField(event, "createdAt", LocalDateTime.of(2026, 10, 21, 12, 0));
++        when(eventRepository.findInRange(any(), any(), any(Pageable.class))).thenReturn(new PageImpl<>(List.of(event)));
++        when(eventRepository.findByTypeInRange(any(), any(), any(), any(Pageable.class))).thenReturn(new PageImpl<>(List.of(event)));
++    }
++
++    private static MockHttpServletRequestBuilder as(MockHttpServletRequestBuilder b, String... permissions) {
++        return b.requestAttr(AuthInterceptor.REQUEST_ATTR, new CurrentUser(42L, List.of("MANAGER"), List.of(permissions)));
++    }
++
++    private int statusOf(MockHttpServletRequestBuilder b) throws Exception {
++        return mvc.perform(b).andReturn().getResponse().getStatus();
++    }
++
++    private static final List<String> ENDPOINTS = List.of(
++            "/api/v1/admin/analytics/events",
++            "/api/v1/admin/reports/low-stock",
++            "/api/v1/admin/reports/pending-orders-count",
++            "/api/v1/admin/reports/refund-summary",
++            "/api/v1/admin/reports/customer-frequency");
++
++    // ── permission matrix ────────────────────────────────────────────────────
++
++    @Test
++    void events_withoutPermission_isForbidden() throws Exception {
++        mvc.perform(as(get("/api/v1/admin/analytics/events"), Permissions.ORDER_VIEW))
++                .andExpect(status().isForbidden())
++                .andExpect(jsonPath("$.error.code").value("FORBIDDEN"));
++        verify(eventRepository, never()).findInRange(any(), any(), any());
++    }
++
++    @Test
++    void events_withoutToken_isUnauthenticated() throws Exception {
++        mvc.perform(get("/api/v1/admin/analytics/events"))
++                .andExpect(status().isUnauthorized())
++                .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"));
++    }
++
++    @Test
++    void events_withPermission_isOk() throws Exception {
++        mvc.perform(as(get("/api/v1/admin/analytics/events"), Permissions.ANALYTICS_VIEW))
++                .andExpect(status().isOk())
++                .andExpect(jsonPath("$.data[0].id").value(1))
++                .andExpect(jsonPath("$.data[0].eventType").value("order_created"))
++                .andExpect(jsonPath("$.data[0].userId").value(9))
++                .andExpect(jsonPath("$.data[0].payload.orderId").value(5))
++                .andExpect(jsonPath("$.data[0].payload.total").value(125000.00))
++                .andExpect(jsonPath("$.meta.totalElements").value(1))
++                .andExpect(jsonPath("$.meta.size").value(1));
++    }
++
++    @Test
++    void everyEndpoint_withoutToken_is401_andWithAnUnrelatedPermission_is403() throws Exception {
++        for (String path : ENDPOINTS) {
++            assertEquals(401, statusOf(get(path)), path);
++            assertEquals(403, statusOf(as(get(path), Permissions.INVENTORY_VIEW)), path);
++            assertEquals(403, statusOf(as(get(path), Permissions.ORDER_VIEW)), path);
++        }
++    }
++
++    @Test
++    void everyEndpoint_withAnalyticsView_isOk() throws Exception {
++        when(reportService.getLowStockProducts(any(), any(Pageable.class))).thenReturn(new PageImpl<InventoryRow>(List.of()));
++        when(reportService.getCustomerPurchaseFrequency(any(Pageable.class))).thenReturn(new PageImpl<CustomerFrequencyRow>(List.of()));
++        when(reportService.getRefundSummary(any(), any())).thenReturn(
++                new RefundSummaryResponse(LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 21), "VND", List.of(), new BigDecimal("0.00")));
++
++        for (String path : ENDPOINTS) {
++            assertEquals(200, statusOf(as(get(path), Permissions.ANALYTICS_VIEW)), path);
++        }
++    }
++
++    // ── behaviour ────────────────────────────────────────────────────────────
++
++    @Test
++    void events_invalidType_returns400() throws Exception {
++        mvc.perform(as(get("/api/v1/admin/analytics/events").param("type", "not_a_type"), Permissions.ANALYTICS_VIEW))
++                .andExpect(status().isBadRequest())
++                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
++        verify(eventRepository, never()).findByTypeInRange(any(), any(), any(), any());
++        verify(eventRepository, never()).findInRange(any(), any(), any());
++    }
++
++    @Test
++    void events_validType_filtersByThatType() throws Exception {
++        mvc.perform(as(get("/api/v1/admin/analytics/events").param("type", "order_created"), Permissions.ANALYTICS_VIEW))
++                .andExpect(status().isOk());
++        verify(eventRepository).findByTypeInRange(eq("order_created"), any(), any(), any(Pageable.class));
++    }
++
++    @Test
++    void events_badDate_andBadSort_return400() throws Exception {
++        mvc.perform(as(get("/api/v1/admin/analytics/events").param("from", "2026-10-01"), Permissions.ANALYTICS_VIEW))
++                .andExpect(status().isBadRequest())
++                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
++        mvc.perform(as(get("/api/v1/admin/analytics/events").param("sort", "payload,asc"), Permissions.ANALYTICS_VIEW))
++                .andExpect(status().isBadRequest())
++                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
++    }
++
++    @Test
++    void pendingOrdersCount_returnsTheCountAndTheDefinition() throws Exception {
++        when(reportService.getPendingOrdersCount()).thenReturn(7L);
++
++        mvc.perform(as(get("/api/v1/admin/reports/pending-orders-count"), Permissions.ANALYTICS_VIEW))
++                .andExpect(status().isOk())
++                .andExpect(jsonPath("$.data.status").value("PENDING_PAYMENT"))
++                .andExpect(jsonPath("$.data.count").value(7))
++                .andExpect(jsonPath("$.meta").doesNotExist());
++    }
++
++    @Test
++    void lowStock_exposesOnlyTheAvailableQuantity_notReservedOrOnHand() throws Exception {
++        InventoryRow row = new InventoryRow() {
++            public Long getProductId() { return 7L; }
++            public String getProductName() { return "Bình giữ nhiệt"; }
++            public String getSku() { return "SKU-1"; }
++            public Integer getQuantityOnHand() { return 10; }
++            public Integer getReservedQuantity() { return 3; }
++            public LocalDateTime getUpdatedAt() { return null; }
++        };
++        when(reportService.getLowStockProducts(eq(5), any(Pageable.class))).thenReturn(new PageImpl<>(List.of(row)));
++
++        mvc.perform(as(get("/api/v1/admin/reports/low-stock").param("threshold", "5"), Permissions.ANALYTICS_VIEW))
++                .andExpect(status().isOk())
++                .andExpect(jsonPath("$.data[0].productId").value(7))
++                .andExpect(jsonPath("$.data[0].available").value(7))
++                .andExpect(jsonPath("$.data[0].reservedQuantity").doesNotExist())
++                .andExpect(jsonPath("$.data[0].quantityOnHand").doesNotExist())
++                .andExpect(jsonPath("$.meta.totalElements").value(1));
++    }
++
++    @Test
++    void lowStock_invalidThreshold_isThe400OfTheInventoryRule() throws Exception {
++        when(reportService.getLowStockProducts(eq(-1), any(Pageable.class))).thenThrow(new BadRequestException("Ngưỡng tồn kho không hợp lệ."));
++
++        mvc.perform(as(get("/api/v1/admin/reports/low-stock").param("threshold", "-1"), Permissions.ANALYTICS_VIEW))
++                .andExpect(status().isBadRequest())
++                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
++    }
++
++    @Test
++    void refundSummary_parsesDates_andReturnsExactAmounts() throws Exception {
++        when(reportService.getRefundSummary(LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 31))).thenReturn(
++                new RefundSummaryResponse(LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 31), "VND", List.of(
++                        new RefundSummaryResponse.Item("PENDING", 2, new BigDecimal("150000.50")),
++                        new RefundSummaryResponse.Item("SUCCESS", 1, new BigDecimal("50000.00"))),
++                        new BigDecimal("200000.50")));
++
++        mvc.perform(as(get("/api/v1/admin/reports/refund-summary").param("from", "2026-10-01").param("to", "2026-10-31"),
++                        Permissions.ANALYTICS_VIEW))
++                .andExpect(status().isOk())
++                .andExpect(jsonPath("$.data.currency").value("VND"))
++                .andExpect(jsonPath("$.data.from").value("2026-10-01"))
++                .andExpect(jsonPath("$.data.items[0].status").value("PENDING"))
++                .andExpect(jsonPath("$.data.items[0].totalAmount").value(150000.50))
++                .andExpect(jsonPath("$.data.items[1].totalAmount").value(50000.00))
++                .andExpect(jsonPath("$.data.totalAmount").value(200000.50));
++    }
++
++    @Test
++    void refundSummary_badDate_returns400_withoutCallingTheService() throws Exception {
++        mvc.perform(as(get("/api/v1/admin/reports/refund-summary").param("from", "01/10/2026"), Permissions.ANALYTICS_VIEW))
++                .andExpect(status().isBadRequest())
++                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
++        verify(reportService, never()).getRefundSummary(any(), any());
++    }
++
++    @Test
++    void customerFrequency_returnsCountsWithoutPersonalData() throws Exception {
++        CustomerFrequencyRow row = new CustomerFrequencyRow() {
++            public Long getUserId() { return 9L; }
++            public Long getOrderCount() { return 4L; }
++            public BigDecimal getTotalSpent() { return new BigDecimal("1250000.00"); }
++            public LocalDateTime getFirstOrderAt() { return LocalDateTime.of(2026, 1, 5, 8, 0); }
++            public LocalDateTime getLastOrderAt() { return LocalDateTime.of(2026, 10, 1, 9, 30); }
++        };
++        when(reportService.getCustomerPurchaseFrequency(any(Pageable.class))).thenReturn(new PageImpl<>(List.of(row)));
++
++        mvc.perform(as(get("/api/v1/admin/reports/customer-frequency"), Permissions.ANALYTICS_VIEW))
++                .andExpect(status().isOk())
++                .andExpect(jsonPath("$.data[0].userId").value(9))
++                .andExpect(jsonPath("$.data[0].orderCount").value(4))
++                .andExpect(jsonPath("$.data[0].totalSpent").value(1250000.00))
++                .andExpect(jsonPath("$.data[0].email").doesNotExist())
++                .andExpect(jsonPath("$.data[0].username").doesNotExist())
++                .andExpect(jsonPath("$.meta.totalElements").value(1));
++    }
++}
+diff --git a/backend/src/test/java/com/example/backend/db/AnalyticsPostgresTest.java b/backend/src/test/java/com/example/backend/db/AnalyticsPostgresTest.java
+new file mode 100644
+index 0000000..e45dc25
+--- /dev/null
++++ b/backend/src/test/java/com/example/backend/db/AnalyticsPostgresTest.java
+@@ -0,0 +1,94 @@
++package com.example.backend.db;
++
++import com.example.backend.entity.AnalyticsEvent;
++import com.example.backend.repository.AnalyticsEventRepository;
++import com.example.backend.service.AnalyticsEventService;
++import com.example.backend.service.AnalyticsEventTypes;
++import com.example.backend.service.AnalyticsPayloadJson;
++import org.junit.jupiter.api.AfterEach;
++import org.junit.jupiter.api.Test;
++import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
++import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.boot.test.context.SpringBootTest;
++import org.springframework.data.domain.Page;
++import org.springframework.data.domain.PageRequest;
++import org.springframework.jdbc.core.JdbcTemplate;
++import org.springframework.test.context.DynamicPropertyRegistry;
++import org.springframework.test.context.DynamicPropertySource;
++import org.springframework.test.context.TestPropertySource;
++
++import java.math.BigDecimal;
++import java.time.LocalDateTime;
++import java.util.LinkedHashMap;
++import java.util.Map;
++import java.util.UUID;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++
++/**
++ * B09 against a REAL PostgreSQL with the REAL Spring context: the jsonb round trip of the payload and the (event_type,
++ * created_at) range query, which no mock can check. Needs ECOGREEN_TEST_PG_URL (optional ECOGREEN_TEST_PG_USER /
++ * ECOGREEN_TEST_PG_PASSWORD); otherwise skipped = NOT RUN.
++ * WARNING: it boots the application against that database with ddl-auto=update and inserts / removes its own rows (session
++ * ids prefixed with a random tag). Point it only at a scratch database. If V80 was not applied, Hibernate creates the table
++ * without the foreign key and the CHECKs. NOT covered here (needs order / payment / refund fixtures): the SQL of the
++ * refund-summary and customer-frequency aggregations.
++ */
++@SpringBootTest
++@TestPropertySource(locations = "classpath:test-jwt.properties")
++@EnabledIfEnvironmentVariable(named = "ECOGREEN_TEST_PG_URL", matches = ".+")
++class AnalyticsPostgresTest {
++
++    @DynamicPropertySource
++    static void database(DynamicPropertyRegistry registry) {
++        String url = System.getenv("ECOGREEN_TEST_PG_URL");
++        if (url == null || url.isBlank()) return;
++        registry.add("spring.datasource.url", () -> url);
++        registry.add("spring.datasource.username", () -> System.getenv().getOrDefault("ECOGREEN_TEST_PG_USER", "postgres"));
++        registry.add("spring.datasource.password", () -> System.getenv().getOrDefault("ECOGREEN_TEST_PG_PASSWORD", ""));
++        registry.add("spring.jpa.hibernate.ddl-auto", () -> "update");
++    }
++
++    @Autowired private AnalyticsEventService service;
++    @Autowired private AnalyticsEventRepository repository;
++    @Autowired private JdbcTemplate jdbc;
++
++    private final String tag = "b09" + UUID.randomUUID().toString().substring(0, 8);
++
++    @AfterEach
++    void cleanUp() {
++        jdbc.update("DELETE FROM analytics_events WHERE session_id = ?", tag);
++    }
++
++    @Test
++    void track_storesAJsonbObject_andItReadsBackThroughTheEntity() {
++        Map<String, Object> payload = new LinkedHashMap<>();
++        payload.put("orderId", 5L);
++        payload.put("total", new BigDecimal("125000.00"));
++        payload.put("note", "Tiếng Việt \"quoted\"");
++
++        service.track(AnalyticsEventTypes.ORDER_CREATED, null, tag, payload);
++
++        assertEquals("object", jdbc.queryForObject(
++                "SELECT jsonb_typeof(payload) FROM analytics_events WHERE session_id = ?", String.class, tag));
++        assertEquals(5L, jdbc.queryForObject(
++                "SELECT (payload->>'orderId')::bigint FROM analytics_events WHERE session_id = ?", Long.class, tag));
++
++        LocalDateTime from = LocalDateTime.now().minusMinutes(5);
++        Page<AnalyticsEvent> page = repository.findByTypeInRange("order_created", from, LocalDateTime.now().plusMinutes(5),
++                PageRequest.of(0, 100));
++        AnalyticsEvent mine = page.getContent().stream().filter(e -> tag.equals(e.getSessionId())).findFirst().orElseThrow();
++        Map<String, Object> back = AnalyticsPayloadJson.read(mine.getPayload());
++        assertEquals(5L, back.get("orderId"));
++        assertEquals("Tiếng Việt \"quoted\"", back.get("note"));
++        assertTrue(mine.getCreatedAt() != null);
++    }
++
++    @Test
++    void track_withAnUnknownUser_neverThrows() {
++        // user id 0 violates fk_analytics_events_user when V80 was applied; without the FK the row is simply stored
++        service.track(AnalyticsEventTypes.ORDER_CREATED, 0L, tag, Map.of("orderId", 1L));
++        // reaching this line is the assertion: a failed analytics write never surfaces
++    }
++}
+diff --git a/backend/src/test/java/com/example/backend/entity/AnalyticsMigrationDriftTest.java b/backend/src/test/java/com/example/backend/entity/AnalyticsMigrationDriftTest.java
+new file mode 100644
+index 0000000..591ab57
+--- /dev/null
++++ b/backend/src/test/java/com/example/backend/entity/AnalyticsMigrationDriftTest.java
+@@ -0,0 +1,112 @@
++package com.example.backend.entity;
++
++import com.example.backend.service.AnalyticsEventTypes;
++import jakarta.persistence.Column;
++import jakarta.persistence.Index;
++import jakarta.persistence.Table;
++import org.hibernate.annotations.JdbcTypeCode;
++import org.hibernate.type.SqlTypes;
++import org.junit.jupiter.api.Test;
++
++import java.io.InputStream;
++import java.lang.reflect.Field;
++import java.nio.charset.StandardCharsets;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Set;
++import java.util.stream.Collectors;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertFalse;
++import static org.junit.jupiter.api.Assertions.assertNotNull;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++
++/**
++ * B09: V80 is plain SQL applied by hand (Flyway is not active), so this test only READS the file. It cannot prove the SQL
++ * runs (that needs PostgreSQL: reported as not executed) but it keeps the SQL, the entity and the Java event-type
++ * whitelist from drifting apart and enforces the migration policy of CLAUDE.md section 6.
++ */
++class AnalyticsMigrationDriftTest {
++
++    private static final String TYPE_FORMAT_REGEX = "^[a-z][a-z0-9_]*$";
++
++    private static String sql() throws Exception {
++        try (InputStream in = AnalyticsMigrationDriftTest.class.getResourceAsStream("/db/migration/V80__analytics_events.sql")) {
++            assertNotNull(in, "V80__analytics_events.sql must be on the classpath");
++            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
++        }
++    }
++
++    private static String statements(String sql) {
++        return sql.lines().filter(line -> !line.stripLeading().startsWith("--")).collect(Collectors.joining("\n"));
++    }
++
++    @Test
++    void migration_hasTheMandatoryHeader_andTheRollbackAndNotExecutedNotes() throws Exception {
++        String sql = sql();
++        for (String label : List.of("LEGACY DATA IMPACT", "NULLABILITY", "CONSTRAINT ORDER", "DATA-LOSS / ROLLBACK RISK",
++                "EMPTY DATABASE", "EXISTING DATABASE", "NOT EXECUTED")) {
++            assertTrue(sql.contains(label), "header must contain " + label);
++        }
++        assertTrue(sql.contains("DROP TABLE IF EXISTS analytics_events;"), "manual rollback SQL must be documented");
++    }
++
++    @Test
++    void migration_isIdempotent_andDestroysNothing() throws Exception {
++        String stmts = statements(sql());
++
++        assertTrue(stmts.contains("CREATE TABLE IF NOT EXISTS analytics_events"));
++        assertTrue(stmts.contains("CREATE INDEX IF NOT EXISTS idx_analytics_events_type_created ON analytics_events (event_type, created_at)"));
++        for (String constraint : List.of("fk_analytics_events_user", "chk_analytics_events_type_format", "chk_analytics_events_payload_object")) {
++            assertTrue(stmts.contains("conname = '" + constraint + "'"), constraint + " must be guarded by a pg_constraint lookup");
++            assertTrue(stmts.contains("ADD CONSTRAINT " + constraint), constraint + " must be added");
++        }
++        assertTrue(stmts.contains("pg_constraint"));
++        assertFalse(stmts.toUpperCase().contains("DROP "), "a forward migration must not drop anything");
++        assertFalse(stmts.toUpperCase().contains("DELETE FROM"), "a forward migration must not delete rows");
++        assertTrue(stmts.contains("payload    JSONB"));
++        assertTrue(stmts.contains("ON DELETE SET NULL"));
++    }
++
++    @Test
++    void entityAndMigration_describeTheSameColumnsAndIndex() throws Exception {
++        String stmts = statements(sql());
++        Table table = AnalyticsEvent.class.getAnnotation(Table.class);
++        assertEquals("analytics_events", table.name());
++        assertEquals(1, table.indexes().length);
++        Index index = table.indexes()[0];
++        assertEquals("idx_analytics_events_type_created", index.name());
++        assertEquals("event_type, created_at", index.columnList());
++        assertTrue(stmts.contains(index.name() + " ON analytics_events (" + index.columnList() + ")"));
++
++        Set<String> columns = new HashSet<>();
++        for (Field field : AnalyticsEvent.class.getDeclaredFields()) {
++            Column column = field.getAnnotation(Column.class);
++            if (column != null) {
++                columns.add(column.name());
++            }
++        }
++        assertEquals(Set.of("event_type", "user_id", "session_id", "payload", "created_at"), columns);
++        for (String column : columns) {
++            assertTrue(stmts.contains(column), "V80 must define " + column);
++        }
++        assertEquals(50, AnalyticsEvent.class.getDeclaredField("eventType").getAnnotation(Column.class).length());
++        assertTrue(stmts.contains("VARCHAR(50)"));
++        assertEquals(100, AnalyticsEvent.class.getDeclaredField("sessionId").getAnnotation(Column.class).length());
++        assertTrue(stmts.contains("VARCHAR(100)"));
++
++        Field payload = AnalyticsEvent.class.getDeclaredField("payload");
++        assertEquals(SqlTypes.JSON, payload.getAnnotation(JdbcTypeCode.class).value(), "the entity maps payload as JSON (jsonb)");
++        assertEquals("jsonb", payload.getAnnotation(Column.class).columnDefinition());
++    }
++
++    @Test
++    void javaEventTypeWhitelist_satisfiesTheDatabaseFormatCheck() throws Exception {
++        assertTrue(statements(sql()).contains(TYPE_FORMAT_REGEX), "the CHECK regex in V80 changed: update this test and the whitelist");
++        for (String type : AnalyticsEventTypes.ALL) {
++            assertTrue(type.matches(TYPE_FORMAT_REGEX), type + " must satisfy chk_analytics_events_type_format");
++            assertTrue(type.length() <= 50, type + " must fit VARCHAR(50)");
++        }
++        assertEquals(AnalyticsEventTypes.ALL.size(), new HashSet<>(AnalyticsEventTypes.ALL).size(), "no duplicates");
++    }
++}
+diff --git a/backend/src/test/java/com/example/backend/service/AnalyticsEventListenerTest.java b/backend/src/test/java/com/example/backend/service/AnalyticsEventListenerTest.java
+new file mode 100644
+index 0000000..5ccc6b9
+--- /dev/null
++++ b/backend/src/test/java/com/example/backend/service/AnalyticsEventListenerTest.java
+@@ -0,0 +1,139 @@
++package com.example.backend.service;
++
++import com.example.backend.entity.OrderStatus;
++import com.example.backend.entity.ReturnStatus;
++import com.example.backend.event.OrderCancelledEvent;
++import com.example.backend.event.OrderPlacedEvent;
++import com.example.backend.event.OrderStatusChangedEvent;
++import com.example.backend.event.ReturnCreatedEvent;
++import com.example.backend.event.ReturnStatusChangedEvent;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++import org.mockito.ArgumentCaptor;
++import org.springframework.context.event.EventListener;
++import org.springframework.transaction.event.TransactionPhase;
++import org.springframework.transaction.event.TransactionalEventListener;
++
++import java.lang.reflect.Method;
++import java.math.BigDecimal;
++import java.util.Arrays;
++import java.util.List;
++import java.util.Map;
++
++import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertFalse;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.ArgumentMatchers.eq;
++import static org.mockito.ArgumentMatchers.isNull;
++import static org.mockito.Mockito.doThrow;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.verifyNoInteractions;
++
++/** B09 listener: the mapping from the events other modules publish to analytics event types. */
++class AnalyticsEventListenerTest {
++
++    private AnalyticsEventService analytics;
++    private AnalyticsEventListener listener;
++
++    @BeforeEach
++    void setUp() {
++        analytics = mock(AnalyticsEventService.class);
++        listener = new AnalyticsEventListener(analytics);
++    }
++
++    @SuppressWarnings("unchecked")
++    private static Map<String, Object> payloadOf(ArgumentCaptor<Map> captor) {
++        return (Map<String, Object>) captor.getValue();
++    }
++
++    @Test
++    void listener_orderPlaced_tracksOrderCreated() {
++        listener.onOrderPlaced(new OrderPlacedEvent(5L, 9L, new BigDecimal("125000.00")));
++
++        ArgumentCaptor<Map> payload = ArgumentCaptor.forClass(Map.class);
++        verify(analytics).track(eq("order_created"), eq(9L), isNull(), payload.capture());
++        assertEquals(5L, payloadOf(payload).get("orderId"));
++        assertEquals(new BigDecimal("125000.00"), payloadOf(payload).get("total"));
++    }
++
++    @Test
++    void listener_statusChangedToPaid_tracksPaymentSuccess() {
++        listener.onOrderStatusChanged(new OrderStatusChangedEvent(5L, OrderStatus.PENDING_PAYMENT, OrderStatus.PAID, null));
++
++        ArgumentCaptor<Map> payload = ArgumentCaptor.forClass(Map.class);
++        verify(analytics).trackForOrder(eq("payment_success"), eq(5L), payload.capture());
++        assertEquals(OrderStatus.PENDING_PAYMENT, payloadOf(payload).get("previousStatus"));
++    }
++
++    @Test
++    void listener_otherStatusChange_tracksNothing() {
++        for (OrderStatus target : OrderStatus.values()) {
++            if (target == OrderStatus.PAID) {
++                continue;
++            }
++            listener.onOrderStatusChanged(new OrderStatusChangedEvent(5L, OrderStatus.PENDING_PAYMENT, target, 3L));
++        }
++
++        verifyNoInteractions(analytics);
++    }
++
++    @Test
++    void listener_orderCancelled_tracksOrderCancelledWithRefundFlag() {
++        listener.onOrderCancelled(new OrderCancelledEvent(5L, true));
++
++        ArgumentCaptor<Map> payload = ArgumentCaptor.forClass(Map.class);
++        verify(analytics).trackForOrder(eq("order_cancelled"), eq(5L), payload.capture());
++        assertEquals(true, payloadOf(payload).get("refundRequired"));
++    }
++
++    @Test
++    void listener_returnCreated_tracksReturnCreatedForTheCustomer() {
++        listener.onReturnCreated(new ReturnCreatedEvent(11L, 5L, 9L));
++
++        ArgumentCaptor<Map> payload = ArgumentCaptor.forClass(Map.class);
++        verify(analytics).track(eq("return_created"), eq(9L), isNull(), payload.capture());
++        assertEquals(11L, payloadOf(payload).get("returnId"));
++        assertEquals(5L, payloadOf(payload).get("orderId"));
++    }
++
++    @Test
++    void listener_returnStatusChanged_tracksReturnStatusChanged() {
++        listener.onReturnStatusChanged(new ReturnStatusChangedEvent(11L, 5L, ReturnStatus.PENDING, ReturnStatus.APPROVED));
++
++        ArgumentCaptor<Map> payload = ArgumentCaptor.forClass(Map.class);
++        verify(analytics).track(eq("return_status_changed"), isNull(), isNull(), payload.capture());
++        assertEquals(ReturnStatus.PENDING, payloadOf(payload).get("oldStatus"));
++        assertEquals(ReturnStatus.APPROVED, payloadOf(payload).get("newStatus"));
++    }
++
++    @Test
++    void listener_neverThrows_evenIfTheServiceDoes() {
++        doThrow(new IllegalStateException("boom")).when(analytics).track(any(), any(), any(), any());
++        doThrow(new IllegalStateException("boom")).when(analytics).trackForOrder(any(), any(), any());
++
++        assertDoesNotThrow(() -> listener.onOrderPlaced(new OrderPlacedEvent(5L, 9L, null)));
++        assertDoesNotThrow(() -> listener.onOrderStatusChanged(new OrderStatusChangedEvent(5L, null, OrderStatus.PAID, null)));
++        assertDoesNotThrow(() -> listener.onOrderCancelled(new OrderCancelledEvent(5L, false)));
++        assertDoesNotThrow(() -> listener.onReturnCreated(new ReturnCreatedEvent(1L, 2L, null)));
++        assertDoesNotThrow(() -> listener.onReturnStatusChanged(new ReturnStatusChangedEvent(1L, 2L, null, ReturnStatus.APPROVED)));
++    }
++
++    @Test
++    void listener_runsAfterCommit_only() {
++        List<Method> handlers = Arrays.stream(AnalyticsEventListener.class.getDeclaredMethods())
++                .filter(m -> java.lang.reflect.Modifier.isPublic(m.getModifiers()))
++                .toList();
++
++        assertEquals(5, handlers.size(), "one handler per consumed event");
++        for (Method m : handlers) {
++            TransactionalEventListener annotation = m.getAnnotation(TransactionalEventListener.class);
++            assertTrue(annotation != null, m.getName() + " must be a @TransactionalEventListener");
++            assertEquals(TransactionPhase.AFTER_COMMIT, annotation.phase(), m.getName());
++            assertFalse(annotation.fallbackExecution(), m.getName() + " must not run when there is no transaction");
++            assertFalse(m.isAnnotationPresent(EventListener.class), m.getName() + " must not be a plain @EventListener");
++        }
++    }
++}
+diff --git a/backend/src/test/java/com/example/backend/service/AnalyticsEventServiceTest.java b/backend/src/test/java/com/example/backend/service/AnalyticsEventServiceTest.java
+new file mode 100644
+index 0000000..2009db4
+--- /dev/null
++++ b/backend/src/test/java/com/example/backend/service/AnalyticsEventServiceTest.java
+@@ -0,0 +1,268 @@
++package com.example.backend.service;
++
++import com.example.backend.entity.AnalyticsEvent;
++import com.example.backend.exception.BadRequestException;
++import com.example.backend.repository.AnalyticsEventRepository;
++import com.example.backend.repository.OrderReportRepository;
++import com.example.backend.repository.OrderReportRepository.OrderOwnerRow;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++import org.mockito.ArgumentCaptor;
++import org.springframework.data.domain.Page;
++import org.springframework.data.domain.PageImpl;
++import org.springframework.data.domain.Pageable;
++import org.springframework.data.domain.Sort;
++import org.springframework.transaction.PlatformTransactionManager;
++import org.springframework.transaction.TransactionDefinition;
++
++import java.math.BigDecimal;
++import java.time.LocalDateTime;
++import java.util.LinkedHashMap;
++import java.util.List;
++import java.util.Map;
++import java.util.Optional;
++
++import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertNull;
++import static org.junit.jupiter.api.Assertions.assertThrows;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.ArgumentMatchers.argThat;
++import static org.mockito.ArgumentMatchers.eq;
++import static org.mockito.Mockito.doThrow;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.never;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.when;
++
++/** B09 {@code AnalyticsEventService}: track never throws, the payload is sanitised, the list validates its input. */
++class AnalyticsEventServiceTest {
++
++    private AnalyticsEventRepository repository;
++    private OrderReportRepository orders;
++    private PlatformTransactionManager transactions;
++    private AnalyticsEventService service;
++
++    @BeforeEach
++    void setUp() {
++        repository = mock(AnalyticsEventRepository.class);
++        orders = mock(OrderReportRepository.class);
++        transactions = mock(PlatformTransactionManager.class);
++        service = new AnalyticsEventService(repository, orders, transactions);
++    }
++
++    private AnalyticsEvent savedEvent() {
++        ArgumentCaptor<AnalyticsEvent> captor = ArgumentCaptor.forClass(AnalyticsEvent.class);
++        verify(repository).save(captor.capture());
++        return captor.getValue();
++    }
++
++    private static Map<String, Object> map(Object... keyValues) {
++        Map<String, Object> m = new LinkedHashMap<>();
++        for (int i = 0; i < keyValues.length; i += 2) {
++            m.put((String) keyValues[i], keyValues[i + 1]);
++        }
++        return m;
++    }
++
++    // ── track: never throws ──────────────────────────────────────────────────
++
++    @Test
++    void track_whenDbFails_doesNotThrow() {
++        when(repository.save(any(AnalyticsEvent.class))).thenThrow(new IllegalStateException("db down: secret detail"));
++
++        assertDoesNotThrow(() -> service.track(AnalyticsEventTypes.ORDER_CREATED, 1L, "s1", map("orderId", 5L)));
++        verify(repository).save(any(AnalyticsEvent.class));
++    }
++
++    @Test
++    void track_whenCommitFails_doesNotThrow() {
++        doThrow(new IllegalStateException("commit failed")).when(transactions).commit(any());
++
++        assertDoesNotThrow(() -> service.track(AnalyticsEventTypes.ORDER_CREATED, 1L, null, map("orderId", 5L)));
++    }
++
++    @Test
++    void track_unknownEventType_isIgnoredOrRejectedWithoutThrowing() {
++        assertDoesNotThrow(() -> service.track("product_view", 1L, null, map("productId", 3L)));
++        assertDoesNotThrow(() -> service.track("ORDER_CREATED", 1L, null, null));
++        assertDoesNotThrow(() -> service.track(null, null, null, null));
++        assertDoesNotThrow(() -> service.track("x'; DROP TABLE users;--", 1L, null, null));
++
++        verify(repository, never()).save(any(AnalyticsEvent.class));
++    }
++
++    @Test
++    void track_runsInItsOwnNewTransaction() {
++        service.track(AnalyticsEventTypes.ORDER_CREATED, 1L, null, map("orderId", 5L));
++
++        verify(transactions).getTransaction(argThat(def -> def.getPropagationBehavior() == TransactionDefinition.PROPAGATION_REQUIRES_NEW));
++    }
++
++    @Test
++    void track_storesTypeUserSessionAndPayload() {
++        service.track(AnalyticsEventTypes.ORDER_CREATED, 9L, "sess-1", map("orderId", 5L, "total", new BigDecimal("125000.00")));
++
++        AnalyticsEvent e = savedEvent();
++        assertEquals("order_created", e.getEventType());
++        assertEquals(9L, e.getUserId());
++        assertEquals("sess-1", e.getSessionId());
++        assertEquals("{\"orderId\":5,\"total\":125000.00}", e.getPayload());
++    }
++
++    @Test
++    void track_dropsSensitiveAndNestedPayloadEntries() {
++        Map<String, Object> payload = map(
++                "orderId", 5L,
++                "customerEmail", "a@b.test",
++                "accessToken", "abc",
++                "shippingAddress", "1 Nguyễn Huệ",
++                "Phone", "0901234567",
++                "cardNumber", "4111",
++                "password", "x",
++                "nested", Map.of("a", 1),
++                "list", List.of(1, 2),
++                "bad key", "x",
++                "note", "ok");
++
++        service.track(AnalyticsEventTypes.ORDER_CREATED, null, null, payload);
++
++        assertEquals("{\"orderId\":5,\"note\":\"ok\"}", savedEvent().getPayload());
++    }
++
++    @Test
++    void track_withNoUsablePayload_storesNullPayload() {
++        service.track(AnalyticsEventTypes.RETURN_CREATED, 1L, null, map("email", "a@b.test"));
++
++        assertNull(savedEvent().getPayload());
++    }
++
++    @Test
++    void track_truncatesLongSessionIdAndStringValues() {
++        service.track(AnalyticsEventTypes.ORDER_CREATED, 1L, "s".repeat(500), map("note", "n".repeat(500)));
++
++        AnalyticsEvent e = savedEvent();
++        assertEquals(AnalyticsEventService.MAX_SESSION_ID, e.getSessionId().length());
++        assertEquals("{\"note\":\"" + "n".repeat(AnalyticsEventService.MAX_STRING_VALUE) + "\"}", e.getPayload());
++    }
++
++    // ── trackForOrder ────────────────────────────────────────────────────────
++
++    private static OrderOwnerRow owner(Long userId, String total) {
++        return new OrderOwnerRow() {
++            public Long getUserId() { return userId; }
++            public BigDecimal getTotalPrice() { return new BigDecimal(total); }
++        };
++    }
++
++    @Test
++    void trackForOrder_addsOwnerAndTotalFromTheOrder() {
++        when(orders.findOwnerRow(5L)).thenReturn(Optional.of(owner(9L, "125000.00")));
++
++        service.trackForOrder(AnalyticsEventTypes.PAYMENT_SUCCESS, 5L, map("previousStatus", "PENDING_PAYMENT"));
++
++        AnalyticsEvent e = savedEvent();
++        assertEquals("payment_success", e.getEventType());
++        assertEquals(9L, e.getUserId());
++        assertEquals("{\"orderId\":5,\"previousStatus\":\"PENDING_PAYMENT\",\"orderTotal\":125000.00}", e.getPayload());
++    }
++
++    @Test
++    void trackForOrder_whenTheLookupFails_stillRecordsWithoutUser_andDoesNotThrow() {
++        when(orders.findOwnerRow(5L)).thenThrow(new IllegalStateException("db"));
++
++        assertDoesNotThrow(() -> service.trackForOrder(AnalyticsEventTypes.ORDER_CANCELLED, 5L, map("refundRequired", true)));
++
++        AnalyticsEvent e = savedEvent();
++        assertNull(e.getUserId());
++        assertEquals("{\"orderId\":5,\"refundRequired\":true}", e.getPayload());
++    }
++
++    // ── list ─────────────────────────────────────────────────────────────────
++
++    @Test
++    void pageable_defaultsToNewestFirst_size20_andClampsTo100() {
++        Pageable defaults = AnalyticsEventService.pageable(null, null, null);
++        assertEquals(0, defaults.getPageNumber());
++        assertEquals(20, defaults.getPageSize());
++        assertEquals(Sort.Direction.DESC, defaults.getSort().getOrderFor("createdAt").getDirection());
++
++        assertEquals(100, AnalyticsEventService.pageable(0, 1000, null).getPageSize());
++        assertEquals(0, AnalyticsEventService.pageable(-3, 10, null).getPageNumber());
++    }
++
++    @Test
++    void pageable_rejectsASortFieldOutsideTheWhitelist() {
++        assertThrows(BadRequestException.class, () -> AnalyticsEventService.pageable(0, 10, "payload,asc"));
++        assertThrows(BadRequestException.class, () -> AnalyticsEventService.pageable(0, 10, "createdAt;drop table x"));
++        assertEquals(Sort.Direction.ASC, AnalyticsEventService.pageable(0, 10, "eventType,asc").getSort().getOrderFor("eventType").getDirection());
++    }
++
++    @Test
++    void listEvents_unknownType_isBadRequest_andNothingIsQueried() {
++        assertThrows(BadRequestException.class, () -> service.listEvents("nope", null, null, Pageable.unpaged()));
++        verify(repository, never()).findByTypeInRange(any(), any(), any(), any());
++        verify(repository, never()).findInRange(any(), any(), any());
++    }
++
++    private static LocalDateTime local(String isoInstant) {
++        return java.time.OffsetDateTime.parse(isoInstant).atZoneSameInstant(ReportTime.zone()).toLocalDateTime();
++    }
++
++    @Test
++    void listEvents_withType_usesTheTypeAndRangeQuery_inTheDatabaseZone() {
++        when(repository.findByTypeInRange(any(), any(), any(), any())).thenReturn(new PageImpl<>(List.of()));
++
++        service.listEvents(" order_created ", "2026-10-01T00:00:00Z", "2026-10-08T00:00:00Z", Pageable.unpaged());
++
++        verify(repository).findByTypeInRange(eq("order_created"), eq(local("2026-10-01T00:00:00Z")),
++                eq(local("2026-10-08T00:00:00Z")), any());
++        verify(repository, never()).findInRange(any(), any(), any());
++    }
++
++    @Test
++    void listEvents_withoutType_usesTheRangeOnlyQuery() {
++        when(repository.findInRange(any(), any(), any())).thenReturn(new PageImpl<>(List.of()));
++
++        service.listEvents("  ", "2026-10-01T00:00:00Z", "2026-10-02T00:00:00Z", Pageable.unpaged());
++
++        verify(repository).findInRange(eq(local("2026-10-01T00:00:00Z")), eq(local("2026-10-02T00:00:00Z")), any());
++        verify(repository, never()).findByTypeInRange(any(), any(), any(), any());
++    }
++
++    @Test
++    void listEvents_defaultWindowIsTheLast30Days() {
++        when(repository.findInRange(any(), any(), any())).thenReturn(new PageImpl<>(List.of()));
++
++        service.listEvents(null, null, null, Pageable.unpaged());
++
++        ArgumentCaptor<LocalDateTime> from = ArgumentCaptor.forClass(LocalDateTime.class);
++        ArgumentCaptor<LocalDateTime> to = ArgumentCaptor.forClass(LocalDateTime.class);
++        verify(repository).findInRange(from.capture(), to.capture(), any());
++        assertEquals(from.getValue(), to.getValue().minusDays(AnalyticsEventService.DEFAULT_WINDOW_DAYS));
++    }
++
++    @Test
++    void listEvents_rejectsBadBounds() {
++        assertThrows(BadRequestException.class,
++                () -> service.listEvents(null, "yesterday", null, Pageable.unpaged()));
++        assertThrows(BadRequestException.class,
++                () -> service.listEvents(null, "2026-10-01", "2026-10-02", Pageable.unpaged()), "an offset is required");
++        assertThrows(BadRequestException.class,
++                () -> service.listEvents(null, "2026-10-08T00:00:00Z", "2026-10-01T00:00:00Z", Pageable.unpaged()));
++        assertThrows(BadRequestException.class,
++                () -> service.listEvents(null, "2024-01-01T00:00:00Z", "2026-10-01T00:00:00Z", Pageable.unpaged()));
++        verify(repository, never()).findInRange(any(), any(), any());
++    }
++
++    @Test
++    void listEvents_acceptsAnOffsetOtherThanUtc() {
++        when(repository.findInRange(any(), any(), any())).thenReturn(new PageImpl<>(List.of()));
++
++        service.listEvents(null, "2026-10-01T07:00:00+07:00", "2026-10-02T07:00:00+07:00", Pageable.unpaged());
++
++        verify(repository).findInRange(eq(local("2026-10-01T00:00:00Z")), eq(local("2026-10-02T00:00:00Z")), any());
++        assertTrue(AnalyticsEventTypes.isKnown("order_created"));
++    }
++}
+diff --git a/backend/src/test/java/com/example/backend/service/AnalyticsPayloadJsonTest.java b/backend/src/test/java/com/example/backend/service/AnalyticsPayloadJsonTest.java
+new file mode 100644
+index 0000000..005aecf
+--- /dev/null
++++ b/backend/src/test/java/com/example/backend/service/AnalyticsPayloadJsonTest.java
+@@ -0,0 +1,72 @@
++package com.example.backend.service;
++
++import org.junit.jupiter.api.Test;
++
++import java.math.BigDecimal;
++import java.util.LinkedHashMap;
++import java.util.Map;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertNull;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++
++class AnalyticsPayloadJsonTest {
++
++    private static Map<String, Object> map(Object... kv) {
++        Map<String, Object> m = new LinkedHashMap<>();
++        for (int i = 0; i < kv.length; i += 2) {
++            m.put((String) kv[i], kv[i + 1]);
++        }
++        return m;
++    }
++
++    @Test
++    void write_emptyOrNull_isNull() {
++        assertNull(AnalyticsPayloadJson.write(null));
++        assertNull(AnalyticsPayloadJson.write(Map.of()));
++        assertNull(AnalyticsPayloadJson.write(map("nested", Map.of("a", 1))), "only unsupported values -> nothing to store");
++    }
++
++    @Test
++    void write_scalars_exactText() {
++        String json = AnalyticsPayloadJson.write(map("orderId", 5L, "total", new BigDecimal("125000.00"),
++                "refundRequired", true, "status", com.example.backend.entity.OrderStatus.PAID, "note", "a\"b\\c\nd"));
++
++        assertEquals("{\"orderId\":5,\"total\":125000.00,\"refundRequired\":true,\"status\":\"PAID\",\"note\":\"a\\\"b\\\\c\\nd\"}", json);
++    }
++
++    @Test
++    void write_controlCharacters_areEscaped() {
++        assertEquals("{\"k\":\"\\u0001\"}", AnalyticsPayloadJson.write(map("k", "\u0001")));
++    }
++
++    @Test
++    void read_roundTripsWhatWriteProduced() {
++        Map<String, Object> original = map("orderId", 5L, "total", new BigDecimal("125000.50"), "ok", false,
++                "note", "Tiếng Việt \"quoted\" \\ \n tab\t");
++
++        Map<String, Object> back = AnalyticsPayloadJson.read(AnalyticsPayloadJson.write(original));
++
++        assertEquals(5L, back.get("orderId"));
++        assertEquals(new BigDecimal("125000.50"), back.get("total"));
++        assertEquals(false, back.get("ok"));
++        assertEquals(original.get("note"), back.get("note"));
++    }
++
++    @Test
++    void read_acceptsWhitespaceNullAndEmptyObject() {
++        Map<String, Object> m = AnalyticsPayloadJson.read(" { \"a\" : 1 , \"b\" : null } ");
++        assertEquals(1L, m.get("a"));
++        assertTrue(m.containsKey("b"));
++        assertNull(m.get("b"));
++        assertTrue(AnalyticsPayloadJson.read("{}").isEmpty());
++    }
++
++    @Test
++    void read_malformedOrNull_isEmpty_neverThrows() {
++        for (String bad : new String[]{null, "", "  ", "[]", "{", "{\"a\"}", "{\"a\":}", "{\"a\":1,}", "{\"a\":1} x",
++                "{\"a\":[1]}", "{\"a\":{\"b\":1}}", "{a:1}", "{\"a\":\"\\q\"}", "{\"a\":\"\\u12\"}"}) {
++            assertTrue(AnalyticsPayloadJson.read(bad).isEmpty(), "should be empty: " + bad);
++        }
++    }
++}
+diff --git a/backend/src/test/java/com/example/backend/service/ReportServiceAnalyticsTest.java b/backend/src/test/java/com/example/backend/service/ReportServiceAnalyticsTest.java
+new file mode 100644
+index 0000000..bd93e0b
+--- /dev/null
++++ b/backend/src/test/java/com/example/backend/service/ReportServiceAnalyticsTest.java
+@@ -0,0 +1,214 @@
++package com.example.backend.service;
++
++import com.example.backend.dto.RefundSummaryResponse;
++import com.example.backend.entity.OrderStatus;
++import com.example.backend.entity.Refund;
++import com.example.backend.exception.BadRequestException;
++import com.example.backend.repository.InventoryRepository.InventoryRow;
++import com.example.backend.repository.OrderReportRepository;
++import com.example.backend.repository.OrderReportRepository.CustomerFrequencyRow;
++import com.example.backend.repository.ProductRepository;
++import com.example.backend.repository.RefundReportRepository;
++import com.example.backend.repository.RefundReportRepository.RefundTotalRow;
++import com.example.backend.service.inventory.InventoryAdminService;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++import org.mockito.ArgumentCaptor;
++import org.springframework.data.domain.Page;
++import org.springframework.data.domain.PageImpl;
++import org.springframework.data.domain.PageRequest;
++import org.springframework.data.domain.Pageable;
++import org.springframework.test.util.ReflectionTestUtils;
++
++import java.lang.reflect.Field;
++import java.math.BigDecimal;
++import java.time.LocalDate;
++import java.time.LocalDateTime;
++import java.util.Collection;
++import java.util.EnumSet;
++import java.util.List;
++import java.util.Set;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertFalse;
++import static org.junit.jupiter.api.Assertions.assertThrows;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.never;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.verifyNoMoreInteractions;
++import static org.mockito.Mockito.when;
++
++/** B09 report calculations with exact numbers; the repositories are mocked, so no SQL runs here (see the Postgres test). */
++class ReportServiceAnalyticsTest {
++
++    private OrderReportRepository orders;
++    private RefundReportRepository refunds;
++    private InventoryAdminService inventory;
++    private ReportService service;
++
++    @BeforeEach
++    void setUp() {
++        orders = mock(OrderReportRepository.class);
++        refunds = mock(RefundReportRepository.class);
++        inventory = mock(InventoryAdminService.class);
++        service = new ReportService();
++        ReflectionTestUtils.setField(service, "orderReportRepository", orders);
++        ReflectionTestUtils.setField(service, "refundReportRepository", refunds);
++        ReflectionTestUtils.setField(service, "inventoryAdminService", inventory);
++    }
++
++    private static RefundTotalRow refundRow(Refund.Status status, long count, String total) {
++        return new RefundTotalRow() {
++            public Refund.Status getStatus() { return status; }
++            public Long getRefundCount() { return count; }
++            public BigDecimal getTotalAmount() { return new BigDecimal(total); }
++        };
++    }
++
++    @SuppressWarnings("unchecked")
++    private static Set<Refund.Status> statusesOf(ArgumentCaptor<Collection> captor) {
++        return EnumSet.copyOf((Collection<Refund.Status>) (Collection) captor.getValue());
++    }
++
++    // ── refund summary ───────────────────────────────────────────────────────
++
++    @Test
++    void refundSummary_sumsByStatus_exactAmounts() {
++        when(refunds.totalsByStatus(any(), any(), any())).thenReturn(List.of(
++                refundRow(Refund.Status.SUCCESS, 1, "50000.00"),
++                refundRow(Refund.Status.PENDING, 2, "150000.50")));
++
++        RefundSummaryResponse summary = service.getRefundSummary(LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 31));
++
++        assertEquals("VND", summary.currency());
++        assertEquals(LocalDate.of(2026, 10, 1), summary.from());
++        assertEquals(LocalDate.of(2026, 10, 31), summary.to());
++        assertEquals(2, summary.items().size());
++        assertEquals("PENDING", summary.items().get(0).status());
++        assertEquals(2L, summary.items().get(0).count());
++        assertEquals(new BigDecimal("150000.50"), summary.items().get(0).totalAmount());
++        assertEquals("SUCCESS", summary.items().get(1).status());
++        assertEquals(1L, summary.items().get(1).count());
++        assertEquals(new BigDecimal("50000.00"), summary.items().get(1).totalAmount());
++        assertEquals(new BigDecimal("200000.50"), summary.totalAmount());
++    }
++
++    @Test
++    void refundSummary_zeroFillsAMissingStatus() {
++        when(refunds.totalsByStatus(any(), any(), any())).thenReturn(List.of(refundRow(Refund.Status.SUCCESS, 3, "90000.00")));
++
++        RefundSummaryResponse summary = service.getRefundSummary(LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 31));
++
++        assertEquals("PENDING", summary.items().get(0).status());
++        assertEquals(0L, summary.items().get(0).count());
++        assertEquals(new BigDecimal("0.00"), summary.items().get(0).totalAmount());
++        assertEquals(new BigDecimal("90000.00"), summary.totalAmount());
++    }
++
++    @Test
++    void refundSummary_queriesWholeDaysInclusive_andOnlyPendingAndSuccess() {
++        when(refunds.totalsByStatus(any(), any(), any())).thenReturn(List.of());
++
++        service.getRefundSummary(LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 31));
++
++        ArgumentCaptor<Collection> statuses = ArgumentCaptor.forClass(Collection.class);
++        ArgumentCaptor<LocalDateTime> from = ArgumentCaptor.forClass(LocalDateTime.class);
++        ArgumentCaptor<LocalDateTime> to = ArgumentCaptor.forClass(LocalDateTime.class);
++        verify(refunds).totalsByStatus(statuses.capture(), from.capture(), to.capture());
++        assertEquals(EnumSet.of(Refund.Status.PENDING, Refund.Status.SUCCESS), statusesOf(statuses));
++        assertFalse(statusesOf(statuses).contains(Refund.Status.FAILED));
++        assertEquals(LocalDateTime.of(2026, 10, 1, 0, 0), from.getValue());
++        assertEquals(LocalDateTime.of(2026, 11, 1, 0, 0), to.getValue(), "the end day is inclusive: the bound is the next midnight");
++    }
++
++    @Test
++    void refundSummary_defaultsToTheCurrentMonthUpToToday() {
++        when(refunds.totalsByStatus(any(), any(), any())).thenReturn(List.of());
++
++        RefundSummaryResponse summary = service.getRefundSummary(null, null);
++
++        LocalDate today = LocalDate.now(ReportTime.zone());
++        assertEquals(today, summary.to());
++        assertEquals(today.withDayOfMonth(1), summary.from());
++    }
++
++    @Test
++    void refundSummary_rejectsAReversedOrTooWideRange_withoutQuerying() {
++        assertThrows(BadRequestException.class, () -> service.getRefundSummary(LocalDate.of(2026, 10, 5), LocalDate.of(2026, 10, 1)));
++        assertThrows(BadRequestException.class, () -> service.getRefundSummary(LocalDate.of(2024, 1, 1), LocalDate.of(2026, 10, 1)));
++        verify(refunds, never()).totalsByStatus(any(), any(), any());
++    }
++
++    // ── customer frequency ───────────────────────────────────────────────────
++
++    @Test
++    void customerFrequency_countsOnlyRevenueStatuses() {
++        Pageable pageable = PageRequest.of(0, 20);
++        Page<CustomerFrequencyRow> page = new PageImpl<>(List.of());
++        when(orders.customerFrequency(any(), any(Pageable.class))).thenReturn(page);
++
++        Page<CustomerFrequencyRow> result = service.getCustomerPurchaseFrequency(pageable);
++
++        assertEquals(page, result);
++        ArgumentCaptor<Collection> statuses = ArgumentCaptor.forClass(Collection.class);
++        verify(orders).customerFrequency(statuses.capture(), org.mockito.ArgumentMatchers.eq(pageable));
++        @SuppressWarnings("unchecked")
++        Set<OrderStatus> used = EnumSet.copyOf((Collection<OrderStatus>) (Collection) statuses.getValue());
++        assertEquals(OrderStatus.revenueStatuses(), used);
++        for (OrderStatus excluded : List.of(OrderStatus.PENDING_PAYMENT, OrderStatus.CANCELLED, OrderStatus.RETURNED, OrderStatus.REFUNDED)) {
++            assertFalse(used.contains(excluded), excluded + " is not revenue");
++        }
++        assertTrue(used.contains(OrderStatus.PAID));
++    }
++
++    // ── pending orders ───────────────────────────────────────────────────────
++
++    @Test
++    void pendingOrders_countsOnlyPendingPayment() {
++        when(orders.countByStatus(OrderStatus.PENDING_PAYMENT)).thenReturn(7L);
++
++        assertEquals(7L, service.getPendingOrdersCount());
++
++        verify(orders).countByStatus(OrderStatus.PENDING_PAYMENT);
++        verifyNoMoreInteractions(orders);
++    }
++
++    // ── low stock ────────────────────────────────────────────────────────────
++
++    @Test
++    void lowStock_usesInventoryNotLegacyStockColumn() {
++        Pageable pageable = PageRequest.of(0, 20);
++        Page<InventoryRow> page = new PageImpl<>(List.of());
++        when(inventory.list(null, true, 5, pageable)).thenReturn(page);
++
++        assertEquals(page, service.getLowStockProducts(5, pageable));
++
++        // the low-stock filter is delegated to the B03 read side (inventory table: on hand - reserved)
++        verify(inventory).list(null, true, 5, pageable);
++        // and ReportService has no way to read products.stock_quantity: it holds no ProductRepository
++        for (Field field : ReportService.class.getDeclaredFields()) {
++            assertFalse(ProductRepository.class.isAssignableFrom(field.getType()),
++                    "ReportService must not read the frozen products.stock_quantity via " + field.getName());
++        }
++    }
++
++    @Test
++    void lowStock_nullThreshold_isPassedOnSoTheInventoryDefaultApplies() {
++        Pageable pageable = PageRequest.of(0, 20);
++        when(inventory.list(null, true, null, pageable)).thenReturn(new PageImpl<>(List.of()));
++
++        service.getLowStockProducts(null, pageable);
++
++        verify(inventory).list(null, true, null, pageable);
++    }
++
++    @Test
++    void reportPageable_defaultsTo20_clampsTo100_andHasNoClientSort() {
++        assertEquals(20, ReportService.reportPageable(null, null).getPageSize());
++        assertEquals(100, ReportService.reportPageable(0, 5000).getPageSize());
++        assertEquals(0, ReportService.reportPageable(-1, 10).getPageNumber());
++        assertTrue(ReportService.reportPageable(0, 10).getSort().isUnsorted());
++    }
++}
+diff --git a/docs/ai/contracts/B09-analytics.md b/docs/ai/contracts/B09-analytics.md
+new file mode 100644
+index 0000000..d1a482d
+--- /dev/null
++++ b/docs/ai/contracts/B09-analytics.md
+@@ -0,0 +1,114 @@
++# B09 — Analytics events & extended reports contract
++
++Owner: B09 (Analytics). Other modules append requests under "Requests for contract changes"; they do not edit this file or the code.
++Verified against the code of branch `feature/b09-analytics` (based on `main` at `99ae2e8`). Order of authority: the code > this contract.
++
++## 1. What B09 owns, and what it never does
++
++- Table `analytics_events` (migration `V80__analytics_events.sql`, hand-applied, idempotent; Flyway is not active), the entity `AnalyticsEvent`, `AnalyticsEventRepository`, `AnalyticsEventService`, `AnalyticsEventListener`, `AnalyticsEventTypes`, `AnalyticsPayloadJson`, `ReportTime`.
++- Read-only report queries over other modules' tables through B09's own repositories `OrderReportRepository` (extends `Repository`, so it has no save/delete) and `RefundReportRepository`, plus `InventoryAdminService.list` (B03 read side). The repositories of B05 / B06 are **not** edited.
++- B09 never writes the tables of B02 / B03 / B05 / B06 / B07, never changes an event class, and never calls a write method of another service.
++- A failure while recording an event never reaches the business flow (section 4).
++
++## 2. Entity — `entity/AnalyticsEvent` (table `analytics_events`)
++
++| Column | Type | Notes |
++|---|---|---|
++| `id` | `BIGSERIAL` PK | |
++| `event_type` | `VARCHAR(50)` NOT NULL | lowercase snake_case (`chk_analytics_events_type_format`); valid values = `AnalyticsEventTypes.ALL` |
++| `user_id` | `BIGINT` nullable | `fk_analytics_events_user` → `users`, `ON DELETE SET NULL`; a plain id in the entity |
++| `session_id` | `VARCHAR(100)` nullable | |
++| `payload` | `JSONB` nullable | a flat JSON object (`chk_analytics_events_payload_object`); text in Java (`@JdbcTypeCode(SqlTypes.JSON) String`) |
++| `created_at` | `TIMESTAMP` NOT NULL | local time of the JVM / database zone (D-9) |
++
++Index `idx_analytics_events_type_created (event_type, created_at)`. The entity declares the same columns and index, so `ddl-auto=update` and `V80` give the same table; the foreign key and the two CHECKs exist only after `V80` (guarded by `pg_constraint`). `AnalyticsMigrationDriftTest` keeps the SQL, the entity and the whitelist aligned.
++
++## 3. Public Java signatures
++
++```java
++// service/AnalyticsEventService  (never throws from the two track methods)
++void track(String eventType, Long userId, String sessionId, Map<String, Object> payload);
++void trackForOrder(String eventType, Long orderId, Map<String, Object> payload);   // adds orderId, orderTotal, owner user id (read only)
++Page<AnalyticsEvent> listEvents(String type, String from, String to, Pageable pageable);   // BadRequestException on bad input
++static Pageable pageable(Integer page, Integer size, String sort);
++
++// service/ReportService (additions only)
++Page<InventoryRow> getLowStockProducts(Integer threshold, Pageable pageable);
++long getPendingOrdersCount();
++RefundSummaryResponse getRefundSummary(LocalDate from, LocalDate to);
++Page<CustomerFrequencyRow> getCustomerPurchaseFrequency(Pageable pageable);
++static Pageable reportPageable(Integer page, Integer size);
++```
++
++Differences from the draft in `MODULE_SPECS.md` section 6 (the code and this task win): `getTotalRefundAmount(from, to)` returning one `BigDecimal` became `getRefundSummary` (per status); `InventoryView` does not exist, the existing `InventoryRow` projection is used; `getCustomerPurchaseFrequency` returns a `Page`, not a `List`.
++
++## 4. Recording rules (the part other modules rely on)
++
++- `track` ignores (logs, no payload) an event type that is not in `AnalyticsEventTypes.ALL`; it never throws. The write runs in a `TransactionTemplate` with `REQUIRES_NEW` created **inside** the try block, so a failing insert or commit can neither fail nor roll back the caller's transaction (a `@Transactional` method would let a commit failure escape its own catch).
++- The payload is sanitised before storage: keys must match `[A-Za-z][A-Za-z0-9_]{0,39}` and must not contain `email, mail, token, password, passwd, secret, address, phone, card, cvv, authorization, cookie, signature, bank` (case-insensitive); values must be String (cut to 200), Boolean, Number or Enum; nulls and nested values are dropped; at most 20 keys; `session_id` is cut to 100. **Never put personal data, credentials or raw payment data in a payload.**
++- Every listener is `@TransactionalEventListener(phase = AFTER_COMMIT)` with `fallbackExecution = false` (guarded by `AnalyticsEventListenerTest.listener_runsAfterCommit_only`): a rolled-back transaction records nothing, and an event published **outside** any transaction is not recorded.
++
++## 5. Events: what is recorded, owner, publish point
++
++| `event_type` | Source event (owner) | Published at | Mapping / payload | `user_id` |
++|---|---|---|---|---|
++| `order_created` | `OrderPlacedEvent(orderId, userId, total)` (B04) | last step of `CheckoutService.checkout`, same transaction | `{orderId, total}` | event `userId` |
++| `payment_success` | `OrderStatusChangedEvent(orderId, oldStatus, newStatus, actorUserId)` (B05) | `OrderService.transitionStatus` | only when `newStatus == PAID`: `{orderId, previousStatus, orderTotal}`. There is no `PaymentSuccessEvent` (B06 is not changed); a COD order moving `PENDING_PAYMENT → PROCESSING` is **not** a `payment_success` | order owner (read after commit) |
++| `order_cancelled` | `OrderCancelledEvent(orderId, refundRequired)` (B05) | `OrderService.transitionStatus` when the new status is `CANCELLED` | `{orderId, refundRequired, orderTotal}`; the spec's `reason` does not exist in the event | order owner (read after commit) |
++| `return_created` | `ReturnCreatedEvent(returnId, orderId, userId)` (B07) | `ReturnService.create` | `{returnId, orderId}` | event `userId` |
++| `return_status_changed` | `ReturnStatusChangedEvent(returnId, orderId, oldStatus, newStatus)` (B07) | `ReturnService.updateStatus` | `{returnId, orderId, oldStatus, newStatus}` | null |
++
++Any other `OrderStatusChangedEvent` records nothing.
++
++**Not recorded (nobody publishes them):** `product_view` (B02), `add_to_cart` and `checkout_started` (B04); and `PaymentSuccessEvent` (B06). B09 did not create these event classes or whitelist their types, because a class nobody publishes is a contract nobody agreed to. See section 9.
++
++## 6. Endpoints (all `analytics:view`; `/api/v1`; envelope `{data, meta}`; errors `{error:{code,message}}`)
++
++| Method | Path | Request | Response | Errors |
++|---|---|---|---|---|
++| GET | `/api/v1/admin/analytics/events` | `type?`, `from?`, `to?`, `page?`, `size?` (default 20, max 100), `sort?` (`createdAt`, `id`, `eventType`; default `createdAt,desc`) | paged `[{id, eventType, userId, sessionId, payload, createdAt}]` | 400 `VALIDATION_ERROR` (unknown `type`, unparsable or offset-less `from`/`to`, `from` after `to`, window > 366 days, bad `sort`), 401, 403 |
++| GET | `/api/v1/admin/reports/low-stock` | `threshold?` (default 10, 0..1,000,000), `page?`, `size?` | paged `[{productId, productName, sku, available}]`, lowest available first | 400 (threshold), 401, 403 |
++| GET | `/api/v1/admin/reports/pending-orders-count` | — | `{status: "PENDING_PAYMENT", count}` | 401, 403 |
++| GET | `/api/v1/admin/reports/refund-summary` | `from?`, `to?` (`yyyy-MM-dd`) | `{from, to, currency: "VND", items: [{status, count, totalAmount}], totalAmount}` | 400 (bad date, `from` after `to`, window > 366 days), 401, 403 |
++| GET | `/api/v1/admin/reports/customer-frequency` | `page?`, `size?` | paged `[{userId, orderCount, totalSpent, firstOrderAt, lastOrderAt}]` | 401, 403 |
++
++Definitions:
++
++- **Pending** = `OrderStatus.PENDING_PAYMENT` (placed, awaiting payment). `PAID` orders waiting to be processed are **not** pending.
++- **Low stock** = `available = quantity_on_hand − reserved_quantity ≤ threshold` in the B03 `inventory` table (via `InventoryAdminService.list`). `products.stock_quantity` is frozen and never read. The response shows `available` only (the B03 contract keeps on-hand and reserved in `/api/v1/admin/inventory`).
++- **Refund summary**: refunds with status `PENDING` or `SUCCESS`, selected by `refunds.created_at` on the calendar days `from`..`to` inclusive; amounts are `BigDecimal` `DECIMAL(12,2)` in VND; `items` always has both statuses (zero-filled); `FAILED` is excluded; `totalAmount` = sum of the items. Statuses are passed as `Refund.Status` parameters.
++- **Customer frequency**: orders per `user_id` whose status is in `OrderStatus.revenueStatuses()` (passed as a parameter, never a literal), one grouped query plus one count query regardless of the number of customers (no N+1). Fixed order: most orders, then user id. It exposes no name or email, so `analytics:view` alone shows no personal data.
++- The legacy revenue reports (`/api/admin/reports/*`, `StatsController`) are untouched (still `requireAdmin`, bare JSON); the new endpoints live in `AdminReportV1Controller` / `AdminAnalyticsV1Controller` to keep the two API generations apart.
++
++## 7. Time zone (open decision D-9)
++
++`timestamp` columns hold **local** time of the JVM / database session zone (today `Asia/Ho_Chi_Minh`: `BackendApplication` sets the JVM default and the datasource URL sets `timezone`). The API speaks UTC ISO-8601:
++
++- `from` / `to` of the events list must carry an offset; they are converted to the local zone before they reach the query. The window is `[from, to)`.
++- `createdAt`, `firstOrderAt`, `lastOrderAt` are returned as UTC instants.
++- Refund-summary `from` / `to` are calendar days in the **local** zone (`from` 00:00 inclusive to the next midnight after `to`).
++- `ReportTime.zone()` is the JVM default zone, so the code stays right if D-9 is resolved by changing the zone in both places. It is **wrong if the JVM zone and the database session zone differ**.
++
++## 8. TEMPORARY-COMPAT and known limitations
++
++- **TEMPORARY-COMPAT: none** was created.
++- Payload is flat JSON only (`AnalyticsPayloadJson`, no JSON library, in the style of `ReturnItemsJson`); a payload with nested values loses those values.
++- The events list without `type` cannot use `idx_analytics_events_type_created` for the time range (the index starts with `event_type`); the 366-day cap and the default 30-day window bound the scan. Add an index on `created_at` only if a measured need appears.
++- The refund summary and customer frequency have no supporting index on `refunds.created_at` / `orders(status, user_id)`; `orders` already has `(status, created_at DESC)`. The 366-day cap bounds the refund scan. Not measured.
++- Events are not recorded when the publisher runs outside a transaction (`fallbackExecution = false`) or when the process dies between commit and the listener; analytics are best-effort, not an audit trail.
++- There is no de-duplication: if a publisher ever publishes the same event twice, it is recorded twice.
++- The SQL of the aggregations and the jsonb round trip are only exercised by `AnalyticsPostgresTest`, which needs `ECOGREEN_TEST_PG_URL` and is skipped otherwise.
++
++## 9. Requests for contract changes
++
++These need a change in another module's code, so B09 did not make them. Each module appends its answer here.
++
++| To | Request | Why |
++|---|---|---|
++| B02 | Publish `ProductViewedEvent(productId, userId)` in the product-detail read path (`ProductService` / `ProductV1Controller`), after the read. `userId` may be null for guests. | `product_view` analytics |
++| B04 | Publish `AddToCartEvent(productId, userId, quantity)` from `CartService` and `CheckoutStartedEvent(userId, cartId)` from `CheckoutService` (or the preview), after the change commits. | `add_to_cart`, `checkout_started` |
++| B06 | Optional: publish `PaymentSuccessEvent(orderId, amount)` where a payment becomes `SUCCESS`. Today B09 derives `payment_success` from `OrderStatusChangedEvent(newStatus = PAID)`, which also fires for the manual confirm; if B06 adds the event, B09 will switch to it and drop the derivation. | exact amount and gateway at the source |
++| B05 | Optional: add a `reason` to `OrderCancelledEvent` (it has only `refundRequired`). Changing the record's signature also changes its consumers (`RefundOnCancelListener`, B10). | spec asks for a cancel reason |
++| owner | Decide whether `MODULE_SPECS.md` section 1 should list B09 as done, and correct B06 / B07 (the table still says "Not started" although their code and contracts exist). B09 did not edit that file. | stale status table |
++
++When an event class above exists, B09 adds its type to `AnalyticsEventTypes` and one listener method; no DDL is needed.
