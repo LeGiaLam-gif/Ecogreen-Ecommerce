@@ -24,4 +24,8 @@ public interface RefundRepository extends JpaRepository<Refund, Long> {
     /** Refunds of many orders in one query (the admin order list). */
     @Query("SELECT r FROM Refund r WHERE r.order.id IN :orderIds ORDER BY r.id")
     List<Refund> findByOrderIdIn(@Param("orderIds") Collection<Long> orderIds);
+
+    /** The refunds of many returns in one query (B07: the return list shows its refund). */
+    @Query("SELECT r FROM Refund r WHERE r.returnId IN :returnIds ORDER BY r.id")
+    List<Refund> findByReturnIdIn(@Param("returnIds") Collection<Long> returnIds);
 }

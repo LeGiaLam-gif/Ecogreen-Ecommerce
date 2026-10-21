@@ -2,7 +2,11 @@ import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { getOrderById, cancelOrder } from '../services/orderApi';
 import { orderStatusInfo } from '../utils/orderStatus';
-import { createReturnRequest, getMyReturns } from '../services/returnApi';
+import { createReturn, getMyReturns } from '../services/returnApi';
+import {
+  returnStatusInfo, isReturnOpen, canRequestReturn, RETURN_MAX_IMAGES, RETURN_MAX_IMAGE_BYTES,
+  RETURN_MAX_TOTAL_BYTES, RETURN_IMAGE_TYPES,
+} from '../utils/returnStatus';
 import { resolveProductImage } from '../utils/imageResolver';
 import './OrderDetail.css';
 
@@ -20,7 +24,9 @@ const OrderDetail = () => {
   const [existingReturn, setExistingReturn] = useState(null);
   const [returnReason, setReturnReason] = useState('Sản phẩm bị lỗi / vỡ khi vận chuyển');
   const [returnDesc, setReturnDesc] = useState('');
-  const [returnImage, setReturnImage] = useState('');
+  const [returnQty, setReturnQty] = useState({}); // orderItemId -> quantity to return (0 = not returned)
+  const [returnFiles, setReturnFiles] = useState([]);
+  const [returnError, setReturnError] = useState('');
   const [submittingReturn, setSubmittingReturn] = useState(false);
   const [returnSuccess, setReturnSuccess] = useState('');
   const [cancelling, setCancelling] = useState(false);
@@ -29,34 +35,80 @@ const OrderDetail = () => {
     setLoading(true);
     Promise.all([
       getOrderById(id),
-      getMyReturns().catch(() => [])
+      getMyReturns({ page: 0, size: 100 }).catch(() => ({ items: [] }))
     ])
       .then(([orderData, returnsData]) => {
         setOrder(orderData);
-        if (Array.isArray(returnsData)) {
-          const matched = returnsData.find((r) => String(r.orderId) === String(id));
-          if (matched) setExistingReturn(matched);
-        }
+        // Newest first: the latest return of this order (an older REJECTED one does not block a new request).
+        const matched = (returnsData.items || []).find((r) => String(r.orderId) === String(id));
+        if (matched) setExistingReturn(matched);
       })
       .catch((err) => setError(err.friendlyMessage || 'Không thể tải thông tin đơn hàng.'))
       .finally(() => setLoading(false));
   }, [id]);
 
+  const openReturnModal = () => {
+    setReturnQty({});
+    setReturnFiles([]);
+    setReturnError('');
+    setShowReturnModal(true);
+  };
+
+  // Client-side checks are UX only; the server validates type (by content), size and count again.
+  const handlePickFiles = (e) => {
+    const picked = Array.from(e.target.files || []);
+    e.target.value = '';
+    const next = [...returnFiles, ...picked];
+    if (next.length > RETURN_MAX_IMAGES) {
+      setReturnError(`Chỉ được đính kèm tối đa ${RETURN_MAX_IMAGES} ảnh.`);
+      return;
+    }
+    if (next.some((f) => !RETURN_IMAGE_TYPES.includes(f.type))) {
+      setReturnError('Chỉ chấp nhận ảnh JPG, PNG hoặc WebP.');
+      return;
+    }
+    if (next.some((f) => f.size > RETURN_MAX_IMAGE_BYTES)) {
+      setReturnError('Mỗi ảnh tối đa 5 MB.');
+      return;
+    }
+    if (next.reduce((sum, f) => sum + f.size, 0) > RETURN_MAX_TOTAL_BYTES) {
+      setReturnError('Tổng dung lượng ảnh vượt quá giới hạn 5,5 MB. Vui lòng chọn ảnh nhỏ hơn.');
+      return;
+    }
+    setReturnError('');
+    setReturnFiles(next);
+  };
+
   const handleSubmitReturn = async (e) => {
     e.preventDefault();
+    const items = (order?.items || [])
+      .filter((it) => Number(returnQty[it.id]) > 0)
+      .map((it) => ({ orderItemId: it.id, quantity: Number(returnQty[it.id]) }));
+    if (items.length === 0) {
+      setReturnError('Vui lòng chọn ít nhất một sản phẩm cần trả.');
+      return;
+    }
+    if (returnFiles.length === 0) {
+      setReturnError('Vui lòng đính kèm ít nhất một ảnh thực tế.');
+      return;
+    }
     setSubmittingReturn(true);
+    setReturnError('');
     try {
-      const res = await createReturnRequest({
+      const res = await createReturn({
         orderId: id,
         reason: returnReason,
         description: returnDesc,
-        imageUrl: returnImage
+        items,
+        images: returnFiles,
       });
       setExistingReturn(res);
+      setOrder(await getOrderById(id)); // the server moved the order to RETURN_REQUESTED
       setShowReturnModal(false);
+      setReturnDesc('');
       setReturnSuccess('Yêu cầu đổi/trả hàng đã được gửi thành công! Đội ngũ EcoGreen sẽ liên hệ bạn sớm.');
     } catch (err) {
-      alert(err.friendlyMessage || 'Không thể gửi yêu cầu đổi/trả. Vui lòng thử lại.');
+      setReturnError(err.friendlyMessage || 'Không thể gửi yêu cầu đổi/trả. Vui lòng thử lại.');
     } finally {
       setSubmittingReturn(false);
     }
@@ -104,7 +156,8 @@ const OrderDetail = () => {
     return stepIndex === current ? 'active' : '';
   };
   const statusInfo = orderStatusInfo(order.status);
-  const canReturn = (order.status === 'PAID' || order.status === 'DELIVERED') && !existingReturn;
+  const canReturn = canRequestReturn(order.status) && !(existingReturn && isReturnOpen(existingReturn.status));
+  const returnInfo = existingReturn ? returnStatusInfo(existingReturn.status) : null;
 
   return (
     <div className="od-page">
@@ -125,21 +178,27 @@ const OrderDetail = () => {
       {/* Existing Return Request Banner */}
       {existingReturn && (
         <div className={`od-return-banner ${existingReturn.status}`}>
-          <span className="od-return-banner-icon">
-            {existingReturn.status === 'APPROVED' ? '✅' : existingReturn.status === 'REJECTED' ? '❌' : '⏳'}
-          </span>
+          <span className="od-return-banner-icon">{returnInfo.icon}</span>
           <div className="od-return-banner-content">
-            <h4>
-              Yêu cầu đổi/trả hàng:{' '}
-              {existingReturn.status === 'APPROVED'
-                ? 'Đã được duyệt'
-                : existingReturn.status === 'REJECTED'
-                ? 'Đã bị từ chối'
-                : 'Đang chờ xử lý'}
-            </h4>
+            <h4>Yêu cầu đổi/trả hàng: {returnInfo.label}</h4>
             <p><strong>Lý do:</strong> {existingReturn.reason}</p>
+            {(existingReturn.items || []).length > 0 && (
+              <p>
+                <strong>Sản phẩm:</strong>{' '}
+                {existingReturn.items.map((it) => `${it.productName} × ${it.quantity}`).join(', ')}
+              </p>
+            )}
             {existingReturn.adminNote && (
               <p><strong>Phản hồi từ EcoGreen:</strong> {existingReturn.adminNote}</p>
+            )}
+            {existingReturn.refund && (
+              <p>
+                <strong>Hoàn tiền:</strong> {fmtVND(existingReturn.refund.amount)}
+                {existingReturn.refund.status === 'SUCCESS' ? ' (đã hoàn tất)' : existingReturn.refund.status === 'FAILED' ? ' (thất bại)' : ' (đang xử lý)'}
+              </p>
+            )}
+            {existingReturn.status === 'INFO_REQUESTED' && (
+              <p>Vui lòng liên hệ EcoGreen để bổ sung thông tin theo phản hồi ở trên.</p>
             )}
           </div>
         </div>
@@ -269,7 +328,7 @@ const OrderDetail = () => {
           {canReturn && (
             <button
               className="od-btn-return"
-              onClick={() => setShowReturnModal(true)}
+              onClick={openReturnModal}
             >
               ♻️ Yêu cầu Đổi / Trả hàng (Chính sách 7 ngày)
             </button>
@@ -331,14 +390,45 @@ const OrderDetail = () => {
               </div>
 
               <div className="od-form-group">
-                <label>Link ảnh chụp thực tế (tùy chọn)</label>
-                <input
-                  type="url"
-                  placeholder="https://..."
-                  value={returnImage}
-                  onChange={(e) => setReturnImage(e.target.value)}
-                />
+                <label>Sản phẩm cần trả</label>
+                {order.items.map((it) => (
+                  <div key={it.id} className="od-return-item">
+                    <span>{it.productName} <small>(đã mua {it.quantity})</small></span>
+                    <input
+                      type="number"
+                      min="0"
+                      max={it.quantity}
+                      value={returnQty[it.id] ?? 0}
+                      onChange={(e) => {
+                        const v = Math.max(0, Math.min(it.quantity, Math.floor(Number(e.target.value) || 0)));
+                        setReturnQty({ ...returnQty, [it.id]: v });
+                      }}
+                      aria-label={`Số lượng trả của ${it.productName}`}
+                    />
+                  </div>
+                ))}
               </div>
+
+              <div className="od-form-group">
+                <label>Ảnh chụp thực tế (1–{RETURN_MAX_IMAGES} ảnh, JPG/PNG/WebP, tối đa 5 MB mỗi ảnh)</label>
+                <input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={handlePickFiles} />
+                <div className="od-return-previews">
+                  {returnFiles.map((f, i) => (
+                    <div key={`${f.name}-${i}`} className="od-return-preview">
+                      <img src={URL.createObjectURL(f)} alt={f.name} />
+                      <button
+                        type="button"
+                        onClick={() => setReturnFiles(returnFiles.filter((_, k) => k !== i))}
+                        aria-label="Xóa ảnh"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {returnError && <p style={{ color: '#c62828', fontSize: '0.88rem' }}>{returnError}</p>}
 
               <div className="od-modal-actions">
                 <button

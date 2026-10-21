@@ -164,14 +164,19 @@ Online payment (`VNPAY`) is confirmed **only** by the provider's signed webhook;
 
 Legacy `/api/payments/**` was removed: `GET /order/{id}` → `GET /payments/{id}`, `PUT /order/{id}/method` → `PUT /payments/{id}/method`, `POST /order/{id}/pay` → `POST /payments/{id}/initiate` (and `mock-pay` in development).
 
-## Returns — `/api/returns`
+## Returns — `/api/v1`
+
+A customer returns items of a `DELIVERED` order with 1–5 photos; staff walk the request through `PENDING → INFO_REQUESTED / APPROVED / REJECTED → RETURNED → REFUNDED`. The server decides the allowed next statuses (`allowedNextStatuses`). Details and side effects: `docs/ai/contracts/B07-return.md`.
 
 | Method | Path | Access | Notes |
 |---|---|---|---|
-| POST | `/` | User | `{ orderId, reason, description?, imageUrl? }`; only for the caller's own order in `PAID` or `DELIVERED`; one pending request per order |
-| GET | `/my` | User | the caller's requests |
-| GET | `/` | Admin | all requests |
-| PUT | `/{id}/status` | Admin | `{ status, adminNote }` — `PENDING`, `APPROVED`, `REJECTED`; approving does not refund or restock |
+| POST | `/returns` | User | `multipart/form-data`: `orderId`, `reason`, `description?`, `items` (JSON `[{orderItemId, quantity}]`), `images` (1–5 files, JPG/PNG/WebP, ≤ 5 MB each); only the caller's own `DELIVERED` order, one open request per order; 201 |
+| GET | `/returns/my` | User | paged list of the caller's requests |
+| GET | `/returns/{id}` | Owner or `return:view` | one request with items, images and refund |
+| GET | `/admin/returns` | `return:view` | paged; optional `status` filter |
+| PATCH | `/admin/returns/{id}/status` | `return:process` | `{ newStatus, adminNote? }`; a note is required for `REJECTED` and `INFO_REQUESTED`; `RETURNED` restocks, `REFUNDED` creates the pending refund that staff complete with `/admin/payments/{orderId}/refund/complete` |
+
+Legacy `/api/returns/**` was removed: `POST /api/returns` → `POST /api/v1/returns` (multipart), `GET /api/returns/my` → `GET /api/v1/returns/my`, `GET /api/returns` → `GET /api/v1/admin/returns`, `PUT /api/returns/{id}/status { status, adminNote }` → `PATCH /api/v1/admin/returns/{id}/status { newStatus, adminNote }`.
 
 ## Users and admin
 

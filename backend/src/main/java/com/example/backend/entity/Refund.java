@@ -39,6 +39,13 @@ public class Refund {
     @Column(name = "provider_transaction_id", length = 100)
     private String providerTransactionId;
 
+    /**
+     * The return this refund pays for (B07, column added by V60); null for a refund created when a paid order is cancelled.
+     * A plain id, not a relation: B06 code never needs the Return.
+     */
+    @Column(name = "return_id")
+    private Long returnId;
+
     /** The staff user who completed or created it; null for the system (the cancel listener). */
     @Column(name = "created_by")
     private Long createdBy;
@@ -73,6 +80,9 @@ public class Refund {
 
     public String getProviderTransactionId() { return providerTransactionId; }
     public void setProviderTransactionId(String providerTransactionId) { this.providerTransactionId = providerTransactionId; }
+
+    public Long getReturnId() { return returnId; }
+    public void setReturnId(Long returnId) { this.returnId = returnId; }
 
     public Long getCreatedBy() { return createdBy; }
     public void setCreatedBy(Long createdBy) { this.createdBy = createdBy; }

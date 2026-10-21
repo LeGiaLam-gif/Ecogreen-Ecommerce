@@ -10,7 +10,8 @@ import { getPaymentSummaries, confirmPayment, completeRefund } from '../../servi
 import { getOrdersByStatus } from '../../services/reportApi';
 import { ORDER_STATUS, ORDER_STATUS_KEYS, orderStatusInfo } from '../../utils/orderStatus';
 import { listAdminUsers, disableUser, enableUser, deleteUser } from '../../services/userApi';
-import { getAllReturns, updateReturnStatus } from '../../services/returnApi';
+import { listAdminReturns, updateReturnStatus } from '../../services/returnApi';
+import { RETURN_STATUS_KEYS, returnStatusInfo, returnActionLabel, returnNeedsNote } from '../../utils/returnStatus';
 import SalesDashboard from './SalesDashboard';
 import { resolveProductImage } from '../../utils/imageResolver';
 import './AdminDashboard.css';
@@ -21,6 +22,7 @@ const emptyProduct = {
 
 // B02: the product tab is paged by the server (admin endpoint); the dashboard reads one page of up to 100 for its alerts.
 const PRODUCT_PAGE_SIZE = 20;
+const RETURN_PAGE_SIZE = 20;
 const DASHBOARD_PRODUCT_SIZE = 100;
 const STATUS_LABELS = {
   ACTIVE: 'Đang bán', DRAFT: 'Bản nháp', OUT_OF_STOCK: 'Hết hàng', INACTIVE: 'Ngừng bán', ARCHIVED: 'Lưu trữ',
@@ -62,6 +64,9 @@ const AdminDashboard = () => {
   const [usersLoading, setUsersLoading] = useState(false);
   const [userReload, setUserReload] = useState(0);
   const [returns, setReturns] = useState([]);
+  const [returnMeta, setReturnMeta] = useState({ page: 0, totalPages: 1, totalElements: 0 });
+  const [returnPage, setReturnPage] = useState(0);
+  const [pendingReturnCount, setPendingReturnCount] = useState(0);
 
   // Bộ lọc chuyên sâu cho từng trang
   const [searchTerm, setSearchTerm] = useState('');
@@ -92,7 +97,7 @@ const AdminDashboard = () => {
   useEffect(() => {
     loadData();
     // eslint-disable-next-line
-  }, [activeTab, orderPage, orderStatusFilter, orderKeyword]);
+  }, [activeTab, orderPage, orderStatusFilter, orderKeyword, returnPage, returnStatusFilter]);
 
   // Order search is done by the server; wait for the admin to stop typing before asking again.
   useEffect(() => {
@@ -123,12 +128,15 @@ const AdminDashboard = () => {
     try {
       if (activeTab === 'dashboard') {
         // Tải đồng thời để tính các chỉ số vận hành và cảnh báo thời gian thực
-        const [p, c, o, counts, r] = await Promise.all([
+        const [p, c, o, counts, pendingRet] = await Promise.all([
           getAdminProducts({ page: 0, size: DASHBOARD_PRODUCT_SIZE }),
           getAllCategories(),
           listAdminOrders({ page: 0, size: 5 }),
           getOrdersByStatus(),
-          getAllReturns(),
+          // Only the count is needed here; a user without return:view simply sees 0.
+          hasPermission('return:view')
+            ? listAdminReturns({ page: 0, size: 1, status: 'PENDING' }).catch(() => null)
+            : Promise.resolve(null),
         ]);
 
         setProducts(p.items || []);
@@ -136,7 +144,7 @@ const AdminDashboard = () => {
         setOrders(o.items);
         setOrderMeta(o.meta);
         setOrderCounts(counts);
-        setReturns(r);
+        setPendingReturnCount(pendingRet?.meta?.totalElements ?? 0);
       } else if (activeTab === 'products') {
         // The product list itself is loaded (and paged / filtered by the server) in the effect below.
         setCategories(await getAllCategories());
@@ -157,7 +165,17 @@ const AdminDashboard = () => {
         setOrderCounts(counts);
         await loadPaymentSummaries(o.items);
       } else if (activeTab === 'returns') {
-        setReturns(await getAllReturns());
+        const [r, pending] = await Promise.all([
+          listAdminReturns({
+            page: returnPage,
+            size: RETURN_PAGE_SIZE,
+            status: returnStatusFilter === 'ALL' ? undefined : returnStatusFilter,
+          }),
+          listAdminReturns({ page: 0, size: 1, status: 'PENDING' }).catch(() => null),
+        ]);
+        setReturns(r.items);
+        setReturnMeta(r.meta);
+        setPendingReturnCount(pending?.meta?.totalElements ?? 0);
       }
     } catch (error) {
       setErrorMsg(error.friendlyMessage || 'Không thể tải dữ liệu.');
@@ -339,14 +357,27 @@ const AdminDashboard = () => {
   };
 
   // --- Returns Handler ---
-  const handleUpdateReturnStatus = async (id, status) => {
-    const defaultNote = status === 'APPROVED'
-      ? 'EcoGreen đã chấp thuận yêu cầu đổi trả. Vui lòng đóng gói sản phẩm gửi về địa chỉ shop.'
-      : 'Yêu cầu không đáp ứng điều kiện đổi trả trong 7 ngày.';
-    const adminNote = prompt(`Nhập ghi chú phản hồi khách hàng:`, defaultNote);
-    if (adminNote === null) return;
+  // The buttons come from the server's `allowedNextStatuses`; the server re-checks the transition and the permission.
+  const handleUpdateReturnStatus = async (ret, newStatus) => {
+    let adminNote = null;
+    if (returnNeedsNote(newStatus)) {
+      const input = prompt(
+        newStatus === 'REJECTED'
+          ? 'Nhập lý do từ chối (bắt buộc, khách hàng sẽ thấy):'
+          : 'Nhập thông tin cần khách bổ sung (bắt buộc, khách hàng sẽ thấy):',
+        newStatus === 'REJECTED' ? 'Yêu cầu không đáp ứng điều kiện đổi trả trong 7 ngày.' : ''
+      );
+      if (input === null) return;
+      if (input.trim() === '') {
+        alert('Vui lòng nhập ghi chú phản hồi khách hàng.');
+        return;
+      }
+      adminNote = input.trim();
+    } else if (!window.confirm(`Xác nhận chuyển yêu cầu #${ret.id} sang "${returnStatusInfo(newStatus).label}"?`)) {
+      return;
+    }
     try {
-      await updateReturnStatus(id, status, adminNote);
+      await updateReturnStatus(ret.id, newStatus, adminNote);
       loadData();
     } catch (e) {
       alert(e.friendlyMessage || 'Không thể cập nhật trạng thái đổi/trả.');
@@ -390,7 +421,6 @@ const AdminDashboard = () => {
 
   // Tính toán nhanh các chỉ số vận hành cần xử lý (Action Items)
   const pendingOrdersCount = orderCounts.PENDING_PAYMENT || 0;
-  const pendingReturns = returns.filter(r => r.status === 'PENDING');
   // Dashboard alert: counted over the newest page of up to 100 products (see DASHBOARD_PRODUCT_SIZE).
   const lowStockProducts = products.filter(p => p.stockQuantity <= 10);
   const recentOrders = orders.slice(0, 5); // the server already returns newest first
@@ -425,14 +455,6 @@ const AdminDashboard = () => {
     return matchStatus && matchSearch;
   });
 
-  // Lọc đổi trả theo điều kiện
-  const filteredReturns = returns.filter(r => {
-    const matchStatus = returnStatusFilter === 'ALL' || r.status === returnStatusFilter;
-    const matchSearch = searchTerm === '' ||
-      String(r.orderId).includes(searchTerm) ||
-      (r.username && r.username.toLowerCase().includes(searchTerm.toLowerCase()));
-    return matchStatus && matchSearch;
-  });
 
   return (
     <div className="admin-shell">
@@ -464,8 +486,8 @@ const AdminDashboard = () => {
               {tab.id === 'orders' && pendingOrdersCount > 0 && (
                 <span className="admin-nav-badge-warn">{pendingOrdersCount}</span>
               )}
-              {tab.id === 'returns' && pendingReturns.length > 0 && (
-                <span className="admin-nav-badge-warn">{pendingReturns.length}</span>
+              {tab.id === 'returns' && pendingReturnCount > 0 && (
+                <span className="admin-nav-badge-warn">{pendingReturnCount}</span>
               )}
             </button>
           ))}
@@ -547,7 +569,7 @@ const AdminDashboard = () => {
                   </div>
 
                   <div
-                    className={`admin-alert-card ${pendingReturns.length > 0 ? 'alert-danger' : 'alert-success'}`}
+                    className={`admin-alert-card ${pendingReturnCount > 0 ? 'alert-danger' : 'alert-success'}`}
                     onClick={() => {
                       setActiveTab('returns');
                       setReturnStatusFilter('PENDING');
@@ -556,10 +578,10 @@ const AdminDashboard = () => {
                   >
                     <div className="alert-card-icon">♻️</div>
                     <div className="alert-card-content">
-                      <div className="alert-card-num">{pendingReturns.length}</div>
+                      <div className="alert-card-num">{pendingReturnCount}</div>
                       <div className="alert-card-label">Đổi / Trả chờ duyệt</div>
                       <div className="alert-card-desc">
-                        {pendingReturns.length > 0 ? 'Cần phản hồi khách trong 7 ngày' : 'Đã xử lý tất cả yêu cầu'}
+                        {pendingReturnCount > 0 ? 'Cần phản hồi khách trong 7 ngày' : 'Đã xử lý tất cả yêu cầu'}
                       </div>
                     </div>
                     <div className="alert-card-arrow">→</div>
@@ -1037,34 +1059,18 @@ const AdminDashboard = () => {
               ══════════════════════════════════════════════════════════════════ */}
           {activeTab === 'returns' && (
             <div className="admin-panel">
-              {/* Lọc trạng thái đổi trả */}
+              {/* Lọc trạng thái đổi trả (lọc bởi máy chủ) */}
               <div className="admin-order-status-tabs">
-                {[
-                  { key: 'ALL', label: 'Tất cả yêu cầu', count: returns.length },
-                  { key: 'PENDING', label: 'Chờ xử lý', count: returns.filter(r => r.status === 'PENDING').length },
-                  { key: 'APPROVED', label: 'Đã duyệt', count: returns.filter(r => r.status === 'APPROVED').length },
-                  { key: 'REJECTED', label: 'Từ chối', count: returns.filter(r => r.status === 'REJECTED').length },
-                ].map((item) => (
+                {['ALL', ...RETURN_STATUS_KEYS].map((key) => (
                   <button
-                    key={item.key}
+                    key={key}
                     type="button"
-                    onClick={() => setReturnStatusFilter(item.key)}
-                    className={`admin-status-pill ${returnStatusFilter === item.key ? 'active' : ''}`}
+                    onClick={() => { setReturnPage(0); setReturnStatusFilter(key); }}
+                    className={`admin-status-pill ${returnStatusFilter === key ? 'active' : ''}`}
                   >
-                    {item.label} <span className="pill-count">({item.count})</span>
+                    {key === 'ALL' ? 'Tất cả yêu cầu' : returnStatusInfo(key).label}
                   </button>
                 ))}
-              </div>
-
-              <div className="admin-panel-toolbar">
-                <input
-                  type="text"
-                  placeholder="Tìm theo mã đơn hoặc tài khoản khách hàng..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="admin-search-input"
-                  style={{ width: '360px' }}
-                />
               </div>
 
               <div className="admin-table-wrap">
@@ -1074,63 +1080,102 @@ const AdminDashboard = () => {
                       <th>Mã YC</th>
                       <th>Mã Đơn</th>
                       <th>Khách hàng</th>
-                      <th>Lý do</th>
-                      <th>Chi tiết mô tả</th>
+                      <th>Lý do &amp; mô tả</th>
+                      <th>Sản phẩm trả</th>
+                      <th>Ảnh</th>
                       <th>Trạng thái</th>
                       <th>Ghi chú phản hồi</th>
                       <th style={{ textAlign: 'center' }}>Thao tác</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredReturns.map((r) => (
-                      <tr key={r.id}>
-                        <td className="admin-cell-strong">#{r.id}</td>
-                        <td className="admin-cell-strong">#{r.orderId}</td>
-                        <td>{r.username}</td>
-                        <td style={{ color: '#e65100', fontWeight: 600 }}>{r.reason}</td>
-                        <td style={{ maxWidth: '240px', fontSize: '0.88rem', color: '#4b5563' }}>
-                          {r.description || '—'}
-                        </td>
-                        <td>
-                          <span style={{
-                            display: 'inline-block',
-                            padding: '4px 10px',
-                            borderRadius: '12px',
-                            fontSize: '0.78rem',
-                            fontWeight: 'bold',
-                            backgroundColor: r.status === 'APPROVED' ? '#e8f5e9' : r.status === 'REJECTED' ? '#ffebee' : '#fff8e1',
-                            color: r.status === 'APPROVED' ? '#2e7d32' : r.status === 'REJECTED' ? '#c62828' : '#f57f17'
-                          }}>
-                            {r.status === 'APPROVED' ? 'Đã duyệt' : r.status === 'REJECTED' ? 'Từ chối' : 'Chờ xử lý'}
-                          </span>
-                        </td>
-                        <td style={{ fontSize: '0.88rem', color: '#555' }}>{r.adminNote || '—'}</td>
-                        <td style={{ textAlign: 'center' }}>
-                          {r.status === 'PENDING' ? (
-                            <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
-                              <button
-                                onClick={() => handleUpdateReturnStatus(r.id, 'APPROVED')}
-                                className="admin-btn-approve"
-                              >
-                                Duyệt
-                              </button>
-                              <button
-                                onClick={() => handleUpdateReturnStatus(r.id, 'REJECTED')}
-                                className="admin-btn-reject"
-                              >
-                                Từ chối
-                              </button>
-                            </div>
-                          ) : (
-                            <span style={{ color: '#9ca3af', fontSize: '0.85rem' }}>Đã hoàn tất</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
+                    {returns.map((r) => {
+                      const info = returnStatusInfo(r.status);
+                      const next = hasPermission('return:process') ? (r.allowedNextStatuses || []) : []; // UX only
+                      return (
+                        <tr key={r.id}>
+                          <td className="admin-cell-strong">#{r.id}</td>
+                          <td className="admin-cell-strong">#{r.orderId}</td>
+                          <td>{r.username}</td>
+                          <td style={{ maxWidth: '240px', fontSize: '0.88rem', color: '#4b5563' }}>
+                            <div style={{ color: '#e65100', fontWeight: 600 }}>{r.reason}</div>
+                            {r.description || '—'}
+                          </td>
+                          <td style={{ fontSize: '0.85rem' }}>
+                            {(r.items || []).length === 0
+                              ? <span className="admin-cell-muted">Toàn bộ đơn (yêu cầu cũ)</span>
+                              : r.items.map((it) => (
+                                <div key={it.orderItemId}>{it.productName} × {it.quantity}</div>
+                              ))}
+                          </td>
+                          <td>
+                            {(r.images || []).length === 0 ? '—' : r.images.map((url, i) => (
+                              <a key={url} href={url} target="_blank" rel="noreferrer" style={{ marginRight: '6px' }}>
+                                Ảnh {i + 1}
+                              </a>
+                            ))}
+                          </td>
+                          <td>
+                            <span style={{
+                              display: 'inline-block',
+                              padding: '4px 10px',
+                              borderRadius: '12px',
+                              fontSize: '0.78rem',
+                              fontWeight: 'bold',
+                              backgroundColor: info.bg,
+                              color: info.color,
+                            }}>
+                              {info.label}
+                            </span>
+                            {r.refund && (
+                              <div style={{ fontSize: '0.78rem', color: '#555', marginTop: '4px' }}>
+                                Hoàn tiền: {Number(r.refund.amount).toLocaleString('vi-VN')} ₫ ({r.refund.status})
+                              </div>
+                            )}
+                            {r.refundMessage && (
+                              <div style={{ fontSize: '0.78rem', color: '#555', marginTop: '4px' }}>{r.refundMessage}</div>
+                            )}
+                          </td>
+                          <td style={{ fontSize: '0.88rem', color: '#555' }}>{r.adminNote || '—'}</td>
+                          <td style={{ textAlign: 'center' }}>
+                            {next.length > 0 ? (
+                              <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                                {next.map((st) => (
+                                  <button
+                                    key={st}
+                                    onClick={() => handleUpdateReturnStatus(r, st)}
+                                    className={st === 'REJECTED' ? 'admin-btn-reject' : 'admin-btn-approve'}
+                                  >
+                                    {returnActionLabel(st)}
+                                  </button>
+                                ))}
+                              </div>
+                            ) : (
+                              <span style={{ color: '#9ca3af', fontSize: '0.85rem' }}>
+                                {r.status === 'REFUNDED' ? 'Đã hoàn tất' : '—'}
+                              </span>
+                            )}
+                            {r.status === 'RETURNED' && r.refund && r.refund.status === 'PENDING'
+                              && hasPermission('payment:refund') && (
+                              <div style={{ fontSize: '0.75rem', color: '#555', marginTop: '4px' }}>
+                                Gửi tiền xong, bấm "Hoàn tất hoàn tiền" ở tab Đơn hàng.
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
-                {filteredReturns.length === 0 && (
+                {returns.length === 0 && (
                   <div className="admin-empty">Không có yêu cầu đổi/trả nào phù hợp.</div>
+                )}
+                {returnMeta.totalPages > 1 && (
+                  <div className="admin-pagination">
+                    <button type="button" disabled={returnPage === 0} onClick={() => setReturnPage((x) => x - 1)}>← Trước</button>
+                    <span>Trang {returnPage + 1} / {returnMeta.totalPages} ({returnMeta.totalElements} yêu cầu)</span>
+                    <button type="button" disabled={returnPage + 1 >= returnMeta.totalPages} onClick={() => setReturnPage((x) => x + 1)}>Sau →</button>
+                  </div>
                 )}
               </div>
             </div>

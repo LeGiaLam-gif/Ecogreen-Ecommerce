@@ -7,7 +7,7 @@ PostgreSQL 16, database `ecogreen`. This document describes the schema that exis
 
 | Source | Contents |
 |---|---|
-| `database/init-postgres.sql` | baseline: `roles`, `users`, `user_roles`, `categories`, `products`, `carts`, `cart_items`, `orders`, `order_items`, `payments`, `return_requests`; seeds the roles `USER` and `ADMIN` |
+| `database/init-postgres.sql` | baseline: `roles`, `users`, `user_roles`, `categories`, `products`, `carts`, `cart_items`, `orders`, `order_items`, `payments`, `return_requests` (renamed `returns` by `V60`); seeds the roles `USER` and `ADMIN` |
 | `backend/src/main/resources/db/migration/V2` | `users.google_sub` (nullable, unique where not null) |
 | `…/V3` | `refresh_tokens` |
 | `…/V4` | `permissions`, `role_permissions` |
@@ -37,8 +37,9 @@ roles ─┬─< user_roles >─┬─ users ─┬─< refresh_tokens
        └─< role_permissions >─ permissions
                         │         ├─< orders ─┬─< order_items >─ products
                         │         │           ├─< payments
-                        │         │           └─< return_requests
-                        │         ├─< return_requests
+                        │         │           └─< returns ─┬─< return_items >─ order_items
+                        │         │                       └─< return_images
+                        │         ├─< returns
                         │         └─< addresses (ON DELETE CASCADE)
 
 products ── inventory (1:1, ON DELETE CASCADE)   products ─< inventory_transactions (RESTRICT) >─ users (actor, SET NULL)
@@ -87,12 +88,15 @@ products ── inventory (1:1, ON DELETE CASCADE)   products ─< inventory_tra
 | `order_status_history` | `order_id` (`ON DELETE CASCADE`), `old_status` (null for the first row), `new_status`, `changed_by` (`ON DELETE SET NULL`), `note`, `changed_at`; index `(order_id, changed_at)` (`V21`) |
 | `order_items` | `order_id` (`ON DELETE CASCADE`), `product_id`, `quantity` (> 0), `price` = unit price **at purchase time** |
 | `payments` | `order_id`, `payment_method` (`COD`, `VIETQR`, `MOMO`, `VNPAY`), `amount`, `status` (`PENDING`, `SUCCESS`, `FAILED`, `CANCELLED`, `REFUNDED`; `chk_payments_status`, `V50`), `provider` (`VNPAY`, `MOCK`; null without a gateway), `transaction_id` (the merchant reference of the CURRENT gateway attempt; replaced by every new attempt), `paid_at`, `raw_response` (write-only gateway payload, never returned by the API), `created_at`, `updated_at`. Unique partial index on `(provider, transaction_id)` where `transaction_id` is not null. Legacy mock rows (`MOCK-…`) were back-filled with `provider = 'MOCK'` |
-| `refunds` | `payment_id` (→ `payments`), `order_id` (→ `orders`), `amount` (`DECIMAL(12,2)`, the full payment), `status` (`PENDING`, `SUCCESS`, `FAILED`), `reason`, `provider_transaction_id` (bank reference entered by staff), `created_by` (→ `users`, `ON DELETE SET NULL`; null for the system), `created_at`, `refunded_at`. Unique partial index on `(order_id)` where `status <> 'FAILED'`: an order has at most one live refund. Created `PENDING` when a paid order is cancelled (`V51`; owned by B06) |
-| `return_requests` | `order_id`, `user_id`, `reason`, `description`, `image_url` (one link), `status` (`PENDING`, `APPROVED`, `REJECTED`), `admin_note` |
+| `refunds` | `payment_id` (→ `payments`), `order_id` (→ `orders`), `return_id` (→ `returns`, `ON DELETE SET NULL`, nullable; `V60`; set for refunds born from a return), `amount` (`DECIMAL(12,2)`; the full payment, or the returned items' value for a partial return), `status` (`PENDING`, `SUCCESS`, `FAILED`), `reason`, `provider_transaction_id` (bank reference entered by staff), `created_by` (→ `users`, `ON DELETE SET NULL`; null for the system), `created_at`, `refunded_at`. Unique partial index on `(order_id)` where `status <> 'FAILED'`: an order has at most one live refund. Created `PENDING` when a paid order is cancelled (`V51`; owned by B06) |
+| `returns` | Renamed from `return_requests` by `V60`. `order_id`, `user_id`, `reason` (100), `description`, `image_url` (**deprecated**, nullable, legacy single link), `status` (`PENDING`, `INFO_REQUESTED`, `APPROVED`, `REJECTED`, `RETURNED`, `REFUNDED`; `chk_returns_status`), `admin_note`, `created_at`, `updated_at`. Indexes `(order_id, status)`, `(user_id, created_at DESC)`, `(status, created_at DESC)` |
+| `return_items` | `return_id` (`ON DELETE CASCADE`), `order_item_id` (→ `order_items`), `quantity` (> 0); unique `(return_id, order_item_id)`. Legacy returns have no rows (whole-order requests) |
+| `return_status_history` | append-only trail of a return: `return_id` (`ON DELETE CASCADE`), `old_status` (null for the first row), `new_status`, `changed_by`, `note`, `changed_at`; index `(return_id, changed_at)` (`V60`). Legacy returns got one back-filled row |
+| `return_images` | `return_id` (`ON DELETE CASCADE`), `image_url` (500), `sort_order`. The legacy `image_url` was back-filled here |
 
 ## Behaviour worth knowing
 
-- **Stock:** lives in `inventory` (on hand / reserved) with a ledger; an order reserves stock, payment commits it, cancellation releases or restocks it (B05 state machine). `products.stock_quantity` is **frozen** (never read or written; removal planned in B13) — any script or report that still reads it is stale. Nothing restores stock for an approved return yet (B07). Orders cancelled before B05's cutover were never restocked; V30 has a read-only diagnostic for them.
+- **Stock:** lives in `inventory` (on hand / reserved) with a ledger; an order reserves stock, payment commits it, cancellation releases or restocks it (B05 state machine). `products.stock_quantity` is **frozen** (never read or written; removal planned in B13) — any script or report that still reads it is stale. Returned goods are restocked when a return reaches `RETURNED` (B07, ledger `reference_type = 'RETURN'`). Orders cancelled before B05's cutover were never restocked; V30 has a read-only diagnostic for them.
 - **Order status** changes are not validated and there is no status-history table.
 - **Time zone:** the connection URL in `application.properties` sets the session time zone to `Asia/Ho_Chi_Minh`.
 - **Demo data:** `init-postgres.sql` seeds roles only. `database/seed-data.sql` is optional demo data and **deletes** existing
