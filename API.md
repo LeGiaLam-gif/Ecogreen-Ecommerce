@@ -192,6 +192,17 @@ All five endpoints are read-only and need `analytics:view` (401 without a token,
 
 The legacy revenue reports (`/api/admin/reports/revenue-over-time`, `orders-by-status`, `top-products`, `summary`) are unchanged and still ADMIN-only with bare JSON.
 
+## Notifications — `/api/v1` (B10)
+
+Customers get an email when something happens to their order or return, and every attempt is logged in `notifications`. Sending runs on a separate bounded thread pool after the business transaction commits: a slow or failing mail server never slows or fails a checkout, a payment or a return. Without `SMTP_HOST` nothing is emailed (the notification is logged as `FAILED` / `EMAIL_NOT_CONFIGURED`). Types, templates and the event behind each: [`docs/ai/contracts/B10-notification.md`](./docs/ai/contracts/B10-notification.md).
+
+| Method | Path | Auth | Notes |
+|---|---|---|---|
+| GET | `/users/me/notifications` | any logged-in user (401 without a token) | Query: `page`, `size` (default 20, max 100), `sort` (`createdAt`, `id`; default `createdAt,desc`). Only the caller's own rows: the user comes from the token and a `userId` query parameter is ignored. Item: `{ id, type, channel, title, body, status, sentAt, createdAt }`; `body` is **plain text** — show it as text, never as HTML; no failure reason is returned |
+| GET | `/admin/notifications` | `analytics:view` (401 / 403) | Query: `status` (`PENDING`, `SENT`, `FAILED`, case-insensitive; anything else → 400 `VALIDATION_ERROR`; omitted = all), `page`, `size`, `sort` (`createdAt`, `id`, `status`, `type`). Item: `{ id, userId, type, channel, title, status, failureReason, sentAt, createdAt }`; `failureReason` is a short code (`USER_DISABLED`, `NO_EMAIL`, `SEND_ERROR`, `EMAIL_NOT_CONFIGURED`); no body and no email address |
+
+Times are UTC ISO-8601. Types: `ORDER_CREATED`, `PAYMENT_SUCCESS`, `ORDER_SHIPPED`, `ORDER_DELIVERED`, `ORDER_CANCELLED`, `RETURN_CREATED`, `RETURN_APPROVED`, `RETURN_REJECTED`, `RETURN_INFO_REQUESTED`, `RETURN_REFUNDED`. Only the `EMAIL` channel is sent.
+
 ## Users and admin
 
 | Method | Path | Access | Notes |

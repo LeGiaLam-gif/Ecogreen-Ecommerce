@@ -24,6 +24,7 @@ PostgreSQL 16, database `ecogreen`. This document describes the schema that exis
 | `…/V51` | `refunds` (owned by B06): FKs to `payments`, `orders`, `users`; status CHECK; unique partial index so an order has at most one non-`FAILED` refund |
 | `…/V70` | `addresses` (customer address book, FK to `users` `ON DELETE CASCADE`, partial unique index: one default per user) |
 | `…/V80` | `analytics_events` (B09): FK to `users` `ON DELETE SET NULL`, `chk_analytics_events_type_format` and `chk_analytics_events_payload_object` guarded by `pg_constraint`, index `(event_type, created_at)`. New table, no data touched |
+| `…/V90` | `notifications` (B10): FK to `users` `ON DELETE CASCADE`, CHECKs on `channel`, `status` and the `type` format, unique `(user_id, type, dedupe_key)` (one notification per business event), indexes `(user_id, created_at DESC)` and `(status, created_at)`. New table, no data touched |
 | `DataLoader` (at startup) | makes sure the roles `CUSTOMER`, `MANAGER`, `ADMIN` exist |
 | Hibernate `ddl-auto=update` | creates missing tables/columns from the JPA entities in development |
 
@@ -45,6 +46,7 @@ roles ─┬─< user_roles >─┬─ users ─┬─< refresh_tokens
 
 products ── inventory (1:1, ON DELETE CASCADE)   products ─< inventory_transactions (RESTRICT) >─ users (actor, SET NULL)
 users ─< analytics_events (SET NULL)
+users ─< notifications (CASCADE)
 ```
 
 ## Tables
@@ -101,6 +103,12 @@ users ─< analytics_events (SET NULL)
 | Table | Columns (key points) |
 |---|---|
 | `analytics_events` | append-only: `event_type` (≤ 50; lowercase snake_case enforced by `chk_analytics_events_type_format`; the list of valid types lives in `AnalyticsEventTypes`), `user_id` (→ `users`, `ON DELETE SET NULL`, nullable), `session_id` (≤ 100, nullable), `payload` (`JSONB`, nullable; a flat object, `chk_analytics_events_payload_object`), `created_at` (local time of the database zone). Index `(event_type, created_at)` (`V80`). Written only by `AnalyticsEventService`; reports never write other tables |
+
+### Notifications (B10)
+
+| Table | Columns (key points) |
+|---|---|
+| `notifications` | `user_id` (→ `users`, `ON DELETE CASCADE`), `type` (≤ 50, UPPER_SNAKE_CASE; the valid list is the `NotificationType` enum), `channel` (`EMAIL`/`SMS`/`PUSH`, only EMAIL is sent), `title` (≤ 255), `body` (`TEXT`, plain text), `status` (`PENDING`/`SENT`/`FAILED`, default `PENDING`), `failure_reason` (≤ 50, a short code, never an exception message), `dedupe_key` (≤ 100, e.g. `order:123:PAID`, nullable), `sent_at`, `created_at`. Unique `(user_id, type, dedupe_key)` keeps one notification per event; indexes `(user_id, created_at DESC)` and `(status, created_at)` (`V90`). Written only by `NotificationService` |
 
 ## Behaviour worth knowing
 
