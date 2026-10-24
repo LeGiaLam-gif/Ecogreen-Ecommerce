@@ -6,7 +6,7 @@ import './Navbar.css';
 
 const Navbar = ({ searchTerm, setSearchTerm }) => {
   const { totalItems } = useCart();
-  const { user, isAdmin, logout } = useAuth();
+  const { user, isAdmin, isStaff, logout } = useAuth();
   const navigate = useNavigate();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef(null);
@@ -136,7 +136,7 @@ const Navbar = ({ searchTerm, setSearchTerm }) => {
                     <span>Liên hệ EcoGreen</span>
                   </Link>
 
-                  {isAdmin && (
+                  {isStaff && (
                     <Link
                       to="/admin"
                       className="dropdown-item admin-highlight"

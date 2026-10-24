@@ -59,11 +59,11 @@ function AppContent() {
           <Route path="/orders/:id" element={<ProtectedRoute><OrderDetail /></ProtectedRoute>} />
           <Route path="/account/addresses" element={<ProtectedRoute><Addresses /></ProtectedRoute>} />
 
-          {/* Admin CMS - requires the ADMIN role, re-checked on every API call server-side too. */}
+          {/* Admin CMS - ADMIN or MANAGER (UX only); every API call is re-checked against the permissions server-side. */}
           <Route
             path="/admin/*"
             element={
-              <ProtectedRoute adminOnly>
+              <ProtectedRoute staffOnly>
                 <AdminDashboard />
               </ProtectedRoute>
             }

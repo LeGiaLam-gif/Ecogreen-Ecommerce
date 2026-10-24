@@ -31,22 +31,34 @@ admin area to keep the catalogue up to date, move orders through their statuses,
 
 ### Management / admin features
 
-- Overview: totals for users, products and orders, plus a sales dashboard (revenue over time, orders by status, top products,
-  selectable date range).
-- Products: create, edit, deactivate (soft delete), including inactive products.
-- Categories: create, edit, delete.
+The admin area is split into tabs. A tab, and each action button inside it, is shown only when the signed-in user holds the
+permission the server requires for it (the server checks it again on every request).
+
+- Overview: action cards (orders waiting for payment, returns waiting for review, products running low, refund amount this
+  month), a "top customers by order count" table, the newest orders, and the sales dashboard (revenue over time, orders by status,
+  top products, selectable date range; the sales dashboard is ADMIN-only for now).
+- Products: search and filter, create (always as a draft), edit, upload several images (they are saved in the order you arrange
+  them before saving), delete images, publish with the missing requirements explained, deactivate (soft delete) and reopen.
+- Categories: a tree you can expand and collapse, with a parent picker and "add child".
+- Inventory: stock on hand, reserved and available per product, a low-stock filter, manual adjustments (a reason is required)
+  and the stock history of a product.
 - Orders: search and filter orders, and move each one to the next allowed status (the server decides which moves are allowed).
-- Returns: approve or reject requests with a note to the customer.
-- Users: server-side search, role and active filters with paging; lock / unlock an account (a locked user is signed out everywhere); delete only a user with no orders or return requests (otherwise lock the account). You cannot lock or delete yourself or the last active admin.
+- Returns: approve or reject requests with a note to the customer, view all the customer's photos, and confirm a pending refund.
+- Customers: server-side search, role and active filters with paging, a detail view with order history; lock / unlock an account
+  (a locked user is signed out everywhere); delete only a user with no orders or return requests (otherwise lock the account).
+  You cannot lock or delete yourself or the last active admin.
+- Discount codes: list, create, edit and delete percent or fixed-amount codes with validity dates.
+- Notifications: the log of customer emails (sent / failed / pending) with a status filter; no message text is shown.
 
 Access is by role: `CUSTOMER`, `MANAGER`, `ADMIN`. The backend has a permission system (27 permission codes, assigned to roles in
-the database), but today every admin endpoint and the admin UI still require the `ADMIN` role; a `MANAGER` cannot use them yet.
+the database). `ADMIN` and `MANAGER` can open `/admin` and see the tabs their permissions allow (by default a `MANAGER` cannot
+lock, unlock or delete users). The only parts that still require the `ADMIN` role are the legacy revenue reports behind the
+sales dashboard and the per-status order counters.
 
 ### What is not included
 
-Real payment gateway and webhooks, an admin screen for discount codes (the API exists),
-notifications,
-analytics events, audit log, Docker images for the app, CI pipeline, frontend tests. The planned work is described in
+Real payment gateway and webhooks, an admin screen to change a user's roles (the API exists), a way to reorder or hand-edit
+the slug of existing product images/products (the API has neither), audit log, Docker images for the app, CI pipeline, frontend tests. The planned work is described in
 [`docs/ai/MODULE_SPECS.md`](./docs/ai/MODULE_SPECS.md).
 
 ## How the system works
