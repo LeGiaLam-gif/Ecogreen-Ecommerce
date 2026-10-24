@@ -12,16 +12,20 @@ PostgreSQL 16, database `ecogreen`. This document describes the schema that exis
 | `…/V3` | `refresh_tokens` |
 | `…/V4` | `permissions`, `role_permissions` |
 | `…/V5` | renames role `USER` → `CUSTOMER` (keeping every user's link), creates `MANAGER` |
-| `…/V6` | seeds the 27 permissions and the role → permission mapping |
+| `…/V6` | seeds 27 permissions and the role → permission mapping (29 after `V41`) |
 | `…/V10` | `products`: `slug`, `compare_price`, `sku`, `brand`, 5-value status CHECK, list indexes |
 | `…/V11` | `product_images` (+ copy of the legacy `products.image`) |
 | `…/V12` | `categories`: `parent_id` (tree) and `slug` |
+| `…/V20` | `orders`: drops every status CHECK found in `pg_constraint`, renames `PENDING` → `PENDING_PAYMENT` and `CONFIRMED` → `PROCESSING`, adds `chk_orders_status` (10 values) and the default `PENDING_PAYMENT` |
+| `…/V21` | `order_status_history` (+ one back-filled row per existing order) |
+| `…/V22` | `orders`: `subtotal`, `discount_amount`, `shipping_fee` (NOT NULL, default 0, back-filled), `discount_code`; indexes `(user_id, created_at DESC)` and `(status, created_at DESC)` |
 | `…/V30` | `inventory` (on hand / reserved, CHECKs) — **converts** `products.stock_quantity` + the stock held by unpaid orders |
 | `…/V31` | `inventory_transactions` (stock ledger, unique partial idempotency index) + one opening row per product |
 | `…/V40` | `discounts` (code unique on `upper(code)`, percent XOR amount, window and minimum CHECKs) |
 | `…/V41` | seeds `discount:view` and `discount:manage` and maps them to `ADMIN` and `MANAGER` |
 | `…/V50` | `payments`: `provider`, `paid_at`, `raw_response`; `chk_payments_status` widened to 5 values (every status CHECK on `payments` is looked up in `pg_constraint` and dropped first); unique partial index on `(provider, transaction_id)`; legacy `MOCK-…` rows back-filled with `provider = 'MOCK'` |
 | `…/V51` | `refunds` (owned by B06): FKs to `payments`, `orders`, `users`; status CHECK; unique partial index so an order has at most one non-`FAILED` refund |
+| `…/V60` | renames `return_requests` → `returns`, drops `NOT NULL` on `returns.image_url`, replaces the status CHECK (`chk_returns_status`, 6 values); creates `return_items`, `return_images` and `return_status_history`; adds nullable `refunds.return_id`; back-fills legacy images and history |
 | `…/V70` | `addresses` (customer address book, FK to `users` `ON DELETE CASCADE`, partial unique index: one default per user) |
 | `…/V80` | `analytics_events` (B09): FK to `users` `ON DELETE SET NULL`, `chk_analytics_events_type_format` and `chk_analytics_events_payload_object` guarded by `pg_constraint`, index `(event_type, created_at)`. New table, no data touched |
 | `…/V90` | `notifications` (B10): FK to `users` `ON DELETE CASCADE`, CHECKs on `channel`, `status` and the `type` format, unique `(user_id, type, dedupe_key)` (one notification per business event), indexes `(user_id, created_at DESC)` and `(status, created_at)`. New table, no data touched |
@@ -62,7 +66,7 @@ users ─< notifications (CASCADE)
 | `roles` | `name` (unique, 50): `CUSTOMER`, `MANAGER`, `ADMIN` |
 | `user_roles` | `(user_id, role_id)` primary key, both foreign keys `ON DELETE CASCADE` |
 | `permissions` | `code` (unique, 100, e.g. `product:create`), `description`. The Java source of truth is `security/Permissions.java`; `PermissionsCatalogueTest` checks `V6` against it |
-| `role_permissions` | `(role_id, permission_id)` primary key, foreign keys `ON DELETE CASCADE`, index on `permission_id`. `ADMIN` has all 27, `MANAGER` 24 (all except `system:configure`, `audit:view`, `user:disable`), `CUSTOMER` none |
+| `role_permissions` | `(role_id, permission_id)` primary key, foreign keys `ON DELETE CASCADE`, index on `permission_id`. `ADMIN` has all 29, `MANAGER` 26 (all except `system:configure`, `audit:view`, `user:disable`), `CUSTOMER` none |
 | `refresh_tokens` | `user_id`, `token_hash` (unique SHA-256 of the opaque token; the token itself is never stored), `family_id`, `expires_at`, `revoked`, `replaced_by_id`, `created_at`. Expired rows are not purged yet |
 | `addresses` | `user_id` (→ `users`, `ON DELETE CASCADE`), `recipient_name`, `phone`, `line1`, `ward`, `district`, `province` (all NOT NULL), `is_default`, timestamps. Index `(user_id)`; unique partial index `(user_id) WHERE is_default` = at most one default per user. At most 10 rows per user (service rule). Orders keep their own text snapshot and never reference this table |
 
@@ -87,7 +91,7 @@ users ─< notifications (CASCADE)
 
 | Table | Columns (key points) |
 |---|---|
-| `discounts` | `code` (stored upper-case; unique index on `upper(code)`), `percent_off` or `amount_off` (exactly one), `min_order_amount`, `valid_from`, `valid_to`, `active`, `created_at`, `updated_at`. `orders.discount_code` copies the code as text, with no foreign key |
+| `discounts` | `code` (stored upper-case; unique index on `upper(code)`), `percent_off` or `amount_off` (exactly one), `min_order_amount`, `valid_from`, `valid_to`, `active`, `created_at` (no `updated_at`). `orders.discount_code` copies the code as text, with no foreign key |
 | `orders` | `user_id`, snapshot of `customer_name`, `customer_phone`, `shipping_address`, `subtotal`, `discount_amount`, `shipping_fee` (default 0), `discount_code`, `total_price`, `status` (10 values: `PENDING_PAYMENT`, `PAID`, `PROCESSING`, `PACKED`, `SHIPPED`, `DELIVERED`, `CANCELLED`, `RETURN_REQUESTED`, `RETURNED`, `REFUNDED`; default `PENDING_PAYMENT`; `V20`). Indexes `(user_id, created_at DESC)` and `(status, created_at DESC)` (`V22`) |
 | `order_status_history` | `order_id` (`ON DELETE CASCADE`), `old_status` (null for the first row), `new_status`, `changed_by` (`ON DELETE SET NULL`), `note`, `changed_at`; index `(order_id, changed_at)` (`V21`) |
 | `order_items` | `order_id` (`ON DELETE CASCADE`), `product_id`, `quantity` (> 0), `price` = unit price **at purchase time** |
@@ -113,21 +117,21 @@ users ─< notifications (CASCADE)
 ## Behaviour worth knowing
 
 - **Stock:** lives in `inventory` (on hand / reserved) with a ledger; an order reserves stock, payment commits it, cancellation releases or restocks it (B05 state machine). `products.stock_quantity` is **frozen** (never read or written; removal planned in B13) — any script or report that still reads it is stale. Returned goods are restocked when a return reaches `RETURNED` (B07, ledger `reference_type = 'RETURN'`). Orders cancelled before B05's cutover were never restocked; V30 has a read-only diagnostic for them.
-- **Order status** changes are not validated and there is no status-history table.
+- **Order status** changes go through the state machine in `entity/OrderStatus.java`; every change is recorded in `order_status_history`.
 - **Time zone:** the connection URL in `application.properties` sets the session time zone to `Asia/Ho_Chi_Minh`.
 - **Demo data:** `init-postgres.sql` seeds roles only. `database/seed-data.sql` is optional demo data and **deletes** existing
   orders, payments, cart items, products and categories before inserting (5 categories, 8 products, 2 demo users). When the B03 tables
   exist it also clears the ledger and inventory first and creates one inventory row (and a `Seed data` ledger row) per product;
   when they do not exist yet it skips that, and V30/V31 convert the stock later.
-  `database/recycled_products.xlsx` is the source of the demo products.
+  `database/recycled_products.xlsx` is the spreadsheet that `seed-data.sql` names as the origin of its data; no code reads it.
 
 ## Verification queries (read-only)
 
 ```sql
 SELECT name FROM roles ORDER BY name;                                   -- ADMIN, CUSTOMER, MANAGER (no USER)
-SELECT count(*) FROM permissions;                                       -- 27
+SELECT count(*) FROM permissions;                                       -- 29 (V6 + V41)
 SELECT r.name, count(rp.permission_id) FROM roles r
-  LEFT JOIN role_permissions rp ON rp.role_id = r.id GROUP BY r.name;   -- ADMIN 27, CUSTOMER 0, MANAGER 24
+  LEFT JOIN role_permissions rp ON rp.role_id = r.id GROUP BY r.name;   -- ADMIN 29, CUSTOMER 0, MANAGER 26
 SELECT ur.* FROM user_roles ur LEFT JOIN roles r ON r.id = ur.role_id
   WHERE r.id IS NULL;                                                   -- no rows (no orphaned links)
 ```

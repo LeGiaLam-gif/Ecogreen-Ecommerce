@@ -7,13 +7,15 @@ authentication, RBAC and envelope contracts are in [`docs/ai/contracts/`](./docs
 
 ## Two API generations
 
-| | `/api/v1/auth/*` (new) | every other `/api/**` (legacy) |
+| | `/api/v1/**` (current) | legacy `/api/admin/**` |
 |---|---|---|
-| Success body | `{ "data": …, "meta": null }` | the bare JSON object / array |
+| Endpoints | everything in this document except the five legacy ones | `GET /api/admin/stats` and `GET /api/admin/reports/{revenue-over-time,orders-by-status,top-products,summary}` |
+| Success body | `{ "data": …, "meta": null }` (lists: `meta` = `{ page, size, totalElements, totalPages }`) | the bare JSON object / array |
 | Error body | `{ "error": { "code", "message", "fields"? } }` | `{ "message": "…" }` |
 | Error codes | `VALIDATION_ERROR`, `BUSINESS_RULE_VIOLATION`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `CONFLICT`, `RATE_LIMITED`, `INTERNAL_ERROR` | HTTP status only |
 
-The frontend (`services/http.js`) unwraps the new envelope only for URLs starting with `/api/v1/`.
+The one `/api/v1` response that is not the envelope is the payment webhook (see Payments). The frontend (`services/http.js`)
+unwraps the new envelope only for URLs starting with `/api/v1/`.
 
 ## Authentication and authorization
 
@@ -24,10 +26,9 @@ right → `403`. Authorization is decided on the server; the frontend only hides
 |---|---|
 | Public | no token needed |
 | User | any signed-in, active user |
-| Owner or Admin | the order's owner, or a user with role `ADMIN` |
-| Admin | role `ADMIN` (legacy `requireAdmin`; a `MANAGER` is denied) |
-
-Permission-based checks (`requirePermission`) exist in the backend but **no endpoint uses them yet**.
+| Owner or `<permission>` | the resource's owner, or a user holding that permission |
+| `<permission>` | `authGuard.requirePermission` (permission codes: `security/Permissions.java`) |
+| Admin (legacy) | role `ADMIN` only (`requireAdmin`; a `MANAGER` is denied). Used only by the five legacy `/api/admin/**` endpoints |
 
 ## Auth — `/api/v1/auth`
 
@@ -118,7 +119,7 @@ Contract: [`docs/ai/contracts/B08-customer.md`](./docs/ai/contracts/B08-customer
 | Method | Path | Notes |
 |---|---|---|
 | POST | `/preview` | `{ discountCode? }` → `{ items[], subtotal, discountAmount, shippingFee, total, issues[] }`; writes nothing |
-| POST | `/` | `{ addressId \| customerName + customerPhone + shippingAddress, discountCode?, paymentMethod? }` (`COD` default, `VIETQR`, `MOMO`) → `201` order. One transaction: lock the cart → validate → create the `PENDING_PAYMENT` order with a price snapshot → reserve stock (ascending product id) → `PENDING` payment → empty the cart. Prices and totals are never read from the request |
+| POST | `/` | `{ addressId \| customerName + customerPhone + shippingAddress, discountCode?, paymentMethod }` (`paymentMethod` is required: `COD`, `VIETQR`, `MOMO` or `VNPAY`) → `201` order. One transaction: lock the cart → validate → create the `PENDING_PAYMENT` order with a price snapshot → reserve stock (ascending product id) → `PENDING` payment → empty the cart. Prices and totals are never read from the request |
 
 Contract: [`docs/ai/contracts/B04-checkout.md`](./docs/ai/contracts/B04-checkout.md).
 
@@ -127,21 +128,18 @@ Contract: [`docs/ai/contracts/B04-checkout.md`](./docs/ai/contracts/B04-checkout
 `GET` (paged) and `GET /{id}` need `discount:view`; `POST`, `PUT /{id}`, `DELETE /{id}` need `discount:manage`.
 Body `{ code, percentOff? | amountOff?, minOrderAmount?, validFrom?, validTo?, active }`; duplicate code → 409.
 
-## Orders — `/api/orders`
+## Orders — `/api/v1`
 
-The legacy `POST /api/orders` is gone; orders are created by `POST /api/v1/checkout`.
-
-Reading and changing orders is on `/api/v1` (envelope `{data, meta}`, paging `page`/`size`/`sort`). Contract: [`docs/ai/contracts/B05-order.md`](./docs/ai/contracts/B05-order.md).
+Orders are created by `POST /api/v1/checkout`. Reading and changing them uses the envelope `{data, meta}` and paging
+`page` / `size` / `sort` (`createdAt`, `totalPrice`; default `createdAt,desc`). Contract: [`docs/ai/contracts/B05-order.md`](./docs/ai/contracts/B05-order.md).
 
 Statuses: `PENDING_PAYMENT`, `PAID`, `PROCESSING`, `PACKED`, `SHIPPED`, `DELIVERED`, `CANCELLED`, `RETURN_REQUESTED`, `RETURNED`, `REFUNDED`.
-Invalid transitions return 400 `BUSINESS_RULE_VIOLATION`. Insufficient stock when an order is created also returns 400 `BUSINESS_RULE_VIOLATION` (since B03; it was 409), with a message that names the product.
-
-## Orders — `/api/v1`
+An invalid transition returns 400 `BUSINESS_RULE_VIOLATION`; so does insufficient stock when an order is created (the message names the product).
 
 | Method | Path | Access | Notes |
 |---|---|---|---|
 | GET | `/orders/my` | User | the caller's orders; optional `status` |
-| GET | `/orders/{id}` | Owner or `order:view_all` | with items, `allowedNextStatuses`, `canCancel` |
+| GET | `/orders/{id}` | Owner or `order:view` | with items, `allowedNextStatuses`, `canCancel` |
 | GET | `/orders/{id}/history` | Owner or `order:view` | status timeline |
 | POST | `/orders/{id}/cancel` | Owner (only while `PENDING_PAYMENT`) or `order:cancel` | optional `{ note }` |
 | GET | `/admin/orders` | `order:view_all` | filters `status`, `keyword`, `from`, `to` |
@@ -190,7 +188,7 @@ All five endpoints are read-only and need `analytics:view` (401 without a token,
 | GET | `/reports/refund-summary` | Query: `from`, `to` (dates `yyyy-MM-dd`, both inclusive, default the current month up to today, at most 366 days). `{ from, to, currency: "VND", items: [{ status, count, totalAmount }], totalAmount }`; `items` always lists `PENDING` and `SUCCESS` (zero-filled), `FAILED` is excluded; refunds are selected by `created_at`; amounts are `DECIMAL(12,2)` |
 | GET | `/reports/customer-frequency` | Query: `page`, `size`. Item: `{ userId, orderCount, totalSpent, firstOrderAt, lastOrderAt }` per customer, counting only revenue statuses (`PAID`, `PROCESSING`, `PACKED`, `SHIPPED`, `DELIVERED`, `RETURN_REQUESTED`); most orders first (fixed order, no `sort`); no name or email |
 
-The legacy revenue reports (`/api/admin/reports/revenue-over-time`, `orders-by-status`, `top-products`, `summary`) are unchanged and still ADMIN-only with bare JSON.
+The legacy revenue reports are listed under *Legacy admin endpoints*.
 
 ## Notifications — `/api/v1` (B10)
 
@@ -203,14 +201,14 @@ Customers get an email when something happens to their order or return, and ever
 
 Times are UTC ISO-8601. Types: `ORDER_CREATED`, `PAYMENT_SUCCESS`, `ORDER_SHIPPED`, `ORDER_DELIVERED`, `ORDER_CANCELLED`, `RETURN_CREATED`, `RETURN_APPROVED`, `RETURN_REJECTED`, `RETURN_INFO_REQUESTED`, `RETURN_REFUNDED`. Only the `EMAIL` channel is sent.
 
-## Users and admin
+## Legacy admin endpoints — `/api/admin` (Admin only, bare JSON)
 
 | Method | Path | Access | Notes |
 |---|---|---|---|
-| GET | `/api/admin/stats` | Admin | `{ totalUsers, totalProducts, totalOrders }` |
-| GET | `/api/admin/reports/revenue-over-time` | Admin | query `range`, `groupBy` |
-| GET | `/api/admin/reports/orders-by-status` | Admin | |
-| GET | `/api/admin/reports/top-products` | Admin | query `limit` (default 5), `range` |
-| GET | `/api/admin/reports/summary` | Admin | query `range` |
+| GET | `/api/admin/stats` | Admin (legacy) | `{ totalUsers, totalProducts, totalOrders }` |
+| GET | `/api/admin/reports/revenue-over-time` | Admin (legacy) | query `range`, `groupBy` |
+| GET | `/api/admin/reports/orders-by-status` | Admin (legacy) | |
+| GET | `/api/admin/reports/top-products` | Admin (legacy) | query `limit` (default 5), `range` |
+| GET | `/api/admin/reports/summary` | Admin (legacy) | query `range` |
 
 `GET /api/users`, `DELETE /api/users/{id}` (replaced by `/api/v1/admin/users`), `GET /api/users/me` and the former `/api/auth/*` endpoints no longer exist; use `/api/v1/auth/me` and `/api/v1/auth/*`.

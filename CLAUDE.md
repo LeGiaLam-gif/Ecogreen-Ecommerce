@@ -14,8 +14,8 @@ Never assume a document is current; verify it against the code before relying on
 Do not introduce Next.js, NestJS, TypeScript, Gradle, MySQL or a second ORM. A new library needs a named task or a one-line
 justification in the report (smallest way to meet a requirement).
 
-**Backend** — package `com.example.backend`, layered folders `api/ config/ controller/ dto/ entity/ exception/ repository/
-security/ service/` (no `modules/` folder). Existing code uses `@Autowired` field injection, and legacy controllers take
+**Backend** — package `com.example.backend`, layered folders `api/ config/ controller/ dto/ entity/ event/ exception/
+repository/ security/ service/ storage/` (no `modules/` folder). Existing code uses `@Autowired` field injection, and legacy controllers take
 `Map<String,Object>` bodies; DTOs expose `from(...)` factories. Follow the style of the file you edit. Endpoints you create or
 rewrite use typed, validated request DTOs.
 
@@ -34,17 +34,19 @@ rewrite use typed, validated request DTOs.
   `security/Permissions.java`; the role → permission mapping lives in the database (seeded by `V6`).
 - New endpoints use `authGuard.requirePermission(request, Permissions.X)` / `requireAnyPermission(...)`.
   `requireAdmin()` / `isAdmin()` are `@Deprecated`, ADMIN-only, and stay until the owning module migrates its endpoints
-  (today the legacy controllers still use them, so a `MANAGER` is denied there).
+  (today only the two legacy controllers still use them, so a `MANAGER` is denied there).
 - `Role.permissions` is deliberately `EAGER` + `@BatchSize` (guarded by `RoleEagerPermissionsTest`). Its real SQL pattern was
   never measured. Do not change its fetch type or `AuthService` token orchestration without a measured run and owner approval
   (`contracts/B01-rbac.md` §7).
 - Permissions reach a client through the token, so a change takes effect after ≤ 15 min. Frontend permission checks are UX only.
 
-**API** — two generations coexist. Only `/api/v1/auth/*` uses the new convention; every other `/api/**` endpoint is legacy
-(bare JSON, `{message}` errors). Rules for this transition are in section 5.
+**API** — two generations coexist. Everything under `/api/v1/**` uses the new convention. The only legacy endpoints left are
+`GET /api/admin/stats` (`AdminController`) and `GET /api/admin/reports/{revenue-over-time,orders-by-status,top-products,summary}`
+(`StatsController`): bare JSON, `{message}` errors, ADMIN-only via `requireAdmin()`. Rules for this transition are in section 5.
 
 **Database** — `database/init-postgres.sql` is the baseline, `spring.jpa.hibernate.ddl-auto=update` runs in development, and
-versioned SQL lives in `backend/src/main/resources/db/migration` (`V2`–`V6` used). **Flyway is not active**; migrations are
+versioned SQL lives in `backend/src/main/resources/db/migration` (used: `V2`–`V6`, `V10`–`V12`, `V20`–`V22`, `V30`–`V31`,
+`V40`–`V41`, `V50`–`V51`, `V60`, `V70`, `V80`, `V90`). **Flyway is not active**; migrations are
 applied by hand (section 6).
 
 **Frontend** — `frontend/src/{pages,components,context,services,utils}`. All HTTP goes through `services/http.js` (the only
@@ -171,7 +173,7 @@ they do not edit the owner's contract or code.
   numbers, not just "does not throw".
 - Run what the change affects: `cd backend && ./mvnw test` (see README for the `mvnw` caveat), `cd frontend && npm run lint &&
   npm run build`, and `node frontend/scripts/verify-auth-refresh.mjs` when `http.js` or token storage changed.
-- Known baseline (verify, it may have changed): `npm run build` passes, `npm run lint` reports a few pre-existing errors,
+- Known baseline (verify, it may have changed): `npm run build` passes, `npm run lint` is clean,
   `npm ci` fails because `package-lock.json` is out of sync (use `npm install` in a scratch copy rather than rewriting the
   lockfile unless the task is to fix it).
 - **Never claim a build, lint or test passed unless you ran it and saw it pass.** Report the command and the result; for a
@@ -189,9 +191,9 @@ they do not edit the owner's contract or code.
 
 ## 11. Known open items (also see `MODULE_SPECS.md` §4)
 
-Seven legacy controllers still use `requireAdmin()`; the permission-loading strategy is unmeasured; `application.properties`
-hard-codes the datasource (the `DB_*` names in `.env.example` are not read by the application); `mvnw` is committed without
-the executable bit; `scratch/` and three `*.patch` files are committed developer leftovers.
+Two legacy controllers (`AdminController`, `StatsController`; five handlers) still use `requireAdmin()`; the permission-loading
+strategy is unmeasured; `application.properties` hard-codes the datasource (the `DB_*` names in `.env.example` are not read by the
+application); `docker-compose.yml` publishes port 5433 with a different password than `application.properties` expects.
 
 ## 12. Completion report
 

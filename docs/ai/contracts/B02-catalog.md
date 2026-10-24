@@ -121,7 +121,7 @@ No `TEMPORARY-COMPAT` markers were added. `requireAdmin()` is no longer called b
 * Keyword search is `lower(...) LIKE` (no trigram index): fine for small catalogues; `pg_trgm` is a later optimisation. Case folding of non-ASCII letters depends on the database locale.
 * The admin stock-bucket filter (≤ 10, 0, > 10) is applied to the page being shown, not on the server (no such server parameter in this contract).
 * The dashboard low-stock count covers the newest 100 products.
-* No cap on images per product; the admin UI has no gallery upload control yet (the endpoint exists; the legacy single-image field is still editable).
+* No cap on images per product. The admin product form uploads gallery images (`ProductImagesField.jsx`); the legacy single-image field is still editable.
 * Public detail/list responses are not cached beyond the image cache header.
 
 ## 14. Requests for contract changes

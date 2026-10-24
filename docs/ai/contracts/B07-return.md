@@ -84,6 +84,5 @@ Errors: 400 `VALIDATION_ERROR` (malformed items JSON, bad status), 400 `BUSINESS
 
 ## Requests for contract changes
 
-- **B05** (`B05-order.md` line 87): "`ReturnRequestService` accepts an order in `PAID` or `DELIVERED`" is obsolete. The service is `ReturnService` and accepts `DELIVERED` only.
 - **B06**: `Refund.amount` may be below the payment amount for a partial return (B06 documents "the full payment"). `Refund` / `RefundRepository` received the additive `returnId` / `findByReturnIdIn`; B06's order-cancel refund path is unchanged.
 - **B08**: `UserRepository` JPQL still uses the entity name `ReturnRequest` (kept on purpose); the table is now `returns`.

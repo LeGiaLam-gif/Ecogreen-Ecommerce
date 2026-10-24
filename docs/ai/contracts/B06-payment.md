@@ -132,7 +132,5 @@ An unknown provider code is the standard `404` envelope. Besides B02 file downlo
 
 ## 12. Requests for contract changes
 
-- **B05 (`contracts/B05-order.md`)**: the line "`POST /api/payments/order/{id}/pay` marks the order `PAID` … TEMPORARY-COMPAT(B05)" is obsolete: the legacy `/api/payments/**` controller was removed and the order becomes `PAID` only through the webhook or staff confirmation. Please update it.
 - **B05 (`OrderService`)**: `getById` and `getOwnedOrAdmin` are unused (see section 9).
-- **B04 (`contracts/B04-checkout.md`)**: `paymentMethod` accepts `VNPAY` now (`SUPPORTED_METHODS`), and the TEMPORARY-COMPAT note on `createPendingPayment` can be dropped (signature unchanged). `CheckoutServiceTest` was adjusted for that (`VNPAY` moved from the refused list to the accepted list).
 - **B07**: reuse `refunds`; do not create it again. A PAID → RETURNED → REFUNDED flow may create its own `refunds` row through `RefundService` or the table directly; the partial unique index allows one non-`FAILED` refund per order, so a return refund after a cancellation refund needs a decision.

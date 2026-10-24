@@ -21,3 +21,9 @@ frontend/dist/
 # B02: uploaded product images (runtime data, never committed)
 uploads/
 backend/uploads/
+
+# Local developer leftovers (never commit)
+/*.patch
+/scratch/
+/ys
+/ys.exit*

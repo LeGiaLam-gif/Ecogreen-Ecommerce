@@ -4,13 +4,14 @@ EcoGreen is a full-stack web shop for eco-friendly everyday products (reusable b
 accessories and similar). Customers browse a catalogue, fill a cart and place orders; staff manage the catalogue, orders,
 returns and users from an admin area. The storefront and admin UI are in Vietnamese.
 
-> **Status:** a working course/portfolio-grade application. Payment is **simulated** (no real payment gateway) and several
-> production features are not built yet — see [What is not included](#what-is-not-included).
+> **Status:** a working course/portfolio-grade application. Online payment goes through VNPay (sandbox by default) and
+> a development-only mock provider; several production features are not built yet — see
+> [What is not included](#what-is-not-included).
 
 ## What this project does
 
 A visitor can browse products without an account. After signing up (or signing in with Google), a customer keeps a server-side
-cart, checks out with delivery details, "pays" for the order and follows it in their order history. An administrator uses the
+cart, checks out with delivery details, pays for the order and follows it in their order history. An administrator uses the
 admin area to keep the catalogue up to date, move orders through their statuses, handle return requests and review sales.
 
 ## Features
@@ -22,10 +23,16 @@ admin area to keep the catalogue up to date, move orders through their statuses,
 - Server-side shopping cart with stock checks (`/api/v1/cart`); each line shows the quantity still available.
 - Checkout (`/checkout`): pick a saved address or type the recipient, enter an optional discount code, and see the server-computed breakdown (items, discount, shipping, total) before confirming. Shipping is a flat fee below a free-shipping threshold.
 - Address book (`/account/addresses`): up to 10 saved addresses, one default, add / edit / delete / set default. Checkout offers these addresses (the default is preselected).
-- Choose a payment method — cash on delivery, VietQR, MoMo or VNPAY — and confirm payment on a simulated payment page
-  (QR codes are displayed, but no money moves and no external service is called).
+- Choose a payment method on the payment page. **Cash on delivery** needs no payment step. **VNPAY** sends the browser to the
+  VNPay gateway; the order becomes paid only when VNPay's signed server-to-server callback arrives (returning to the shop proves
+  nothing). **VietQR** and **MoMo** show a static QR code in the UI; the backend has no payment provider for them, so a staff member
+  confirms the payment. With `PAYMENT_MOCK_ENABLED=true` (the default when the variable is unset) a development-only mock provider
+  and "mock pay" buttons are available; set it to `false` outside development.
 - Order history and order detail with a status timeline; an unpaid order can be cancelled by its owner.
-- Return / exchange request for a paid or delivered order (reason, description, optional image link) and its review status.
+- Return request for a `DELIVERED` order: choose the items and quantities, give a reason and description, and attach 1–5 photos
+  (JPG/PNG/WebP, up to 5 MB each); only one open request per order. The customer follows its status in the order detail.
+- Customers receive an email for order and return events when SMTP is configured; every attempt is logged (see the admin
+  Notifications tab). The customer-facing notification list exists in the API only.
 - Register, sign in with username and password, or sign in with Google (when configured). Sessions renew automatically.
 - FAQ, contact and return-policy pages. The chat widget gives canned replies; it is not connected to a support team.
 
@@ -36,30 +43,35 @@ permission the server requires for it (the server checks it again on every reque
 
 - Overview: action cards (orders waiting for payment, returns waiting for review, products running low, refund amount this
   month), a "top customers by order count" table, the newest orders, and the sales dashboard (revenue over time, orders by status,
-  top products, selectable date range; the sales dashboard is ADMIN-only for now).
+  top products, selectable date range; the sales dashboard is ADMIN-only because it uses the legacy reports).
 - Products: search and filter, create (always as a draft), edit, upload several images (they are saved in the order you arrange
   them before saving), delete images, publish with the missing requirements explained, deactivate (soft delete) and reopen.
 - Categories: a tree you can expand and collapse, with a parent picker and "add child".
 - Inventory: stock on hand, reserved and available per product, a low-stock filter, manual adjustments (a reason is required)
   and the stock history of a product.
-- Orders: search and filter orders, and move each one to the next allowed status (the server decides which moves are allowed).
-- Returns: approve or reject requests with a note to the customer, view all the customer's photos, and confirm a pending refund.
+- Orders: search and filter orders, and move each one to the next allowed status (the server decides which moves are allowed), confirm a VietQR / MoMo payment, and complete a pending refund.
+- Returns: request more information from the customer, approve or reject with a note, mark the goods as received (this restocks them) and start the refund; view all the customer's photos. Staff complete the pending refund here or in the Orders tab; there is no automatic gateway refund.
 - Customers: server-side search, role and active filters with paging, a detail view with order history; lock / unlock an account
   (a locked user is signed out everywhere); delete only a user with no orders or return requests (otherwise lock the account).
   You cannot lock or delete yourself or the last active admin.
 - Discount codes: list, create, edit and delete percent or fixed-amount codes with validity dates.
 - Notifications: the log of customer emails (sent / failed / pending) with a status filter; no message text is shown.
 
-Access is by role: `CUSTOMER`, `MANAGER`, `ADMIN`. The backend has a permission system (27 permission codes, assigned to roles in
+Access is by role: `CUSTOMER`, `MANAGER`, `ADMIN`. The backend has a permission system (29 permission codes, assigned to roles in
 the database). `ADMIN` and `MANAGER` can open `/admin` and see the tabs their permissions allow (by default a `MANAGER` cannot
-lock, unlock or delete users). The only parts that still require the `ADMIN` role are the legacy revenue reports behind the
-sales dashboard and the per-status order counters.
+lock, unlock or delete users, and has no `audit:view` or `system:configure`). The only endpoints that still require the `ADMIN`
+role are the five legacy ones under `/api/admin` (`/stats` and the four `/reports/*` the sales dashboard reads).
 
 ### What is not included
 
-Real payment gateway and webhooks, an admin screen to change a user's roles (the API exists), a way to reorder or hand-edit
-the slug of existing product images/products (the API has neither), audit log, Docker images for the app, CI pipeline, frontend tests. The planned work is described in
-[`docs/ai/MODULE_SPECS.md`](./docs/ai/MODULE_SPECS.md).
+- Payments: no gateway other than VNPay (and the development mock); MoMo and VietQR exist only as static QR codes in the UI.
+  Refunds are recorded by staff; nothing is refunded automatically at the gateway. Expired `PENDING_PAYMENT` orders are not cancelled automatically.
+- Screens: no admin screen to change a user's roles (the API exists), no screen for the analytics events list, no customer-facing notification list.
+- Accounts: no password reset and no email verification.
+- Operations: no audit log, no Docker image for the application, no CI pipeline, no health/metrics endpoints, no frontend tests.
+- The five legacy `/api/admin` endpoints still use the older API shape.
+
+Remaining planned work is in [`docs/ai/MODULE_SPECS.md`](./docs/ai/MODULE_SPECS.md).
 
 ## How the system works
 
@@ -84,27 +96,29 @@ Spring Boot REST API (:8081) ──► PostgreSQL
 | Layer | Technology |
 |---|---|
 | Frontend | React 19, Vite 8, React Router 7, axios, `qrcode.react`; ESLint 9 |
-| Backend | Java 21, Spring Boot 4.0.5 (Web, Data JPA/Hibernate, Validation), Maven wrapper |
+| Backend | Java 21, Spring Boot 4.0.5 (Web, Data JPA/Hibernate, Validation, Mail), Maven wrapper |
 | Security | JWT (jjwt, HS256), BCrypt (`spring-security-crypto`), Google ID-token verification (`google-api-client`) |
 | Database | PostgreSQL 16 |
 | Tests | JUnit 5 + Mockito (backend); a dependency-free Node script for the frontend token-refresh logic |
+| Payments / email | VNPay (HMAC-signed redirect and callback), SMTP through Spring Mail |
 | Local infrastructure | Docker Compose (PostgreSQL only) |
 
 ## Project structure
 
 ```
 backend/                 Spring Boot application (package com.example.backend)
-  src/main/java/.../       api, config, controller, dto, entity, exception, repository, security, service
+  src/main/java/.../       api, config, controller, dto, entity, event, exception, repository, security, service, storage
   src/main/resources/      application.properties, db/migration/ (hand-applied SQL migrations)
   src/test/                unit tests
 frontend/                React application
   src/pages, components    screens and shared UI
-  src/context              AuthContext, CartContext
-  src/services             API modules; http.js is the single HTTP client
+  src/context, hooks       AuthContext, CartContext, usePermission
+  src/pages/admin          admin dashboard and its tabs
+  src/services, utils      API modules (http.js is the single HTTP client) and helpers
   scripts/                 verify-auth-refresh.mjs
-database/                init-postgres.sql (schema), seed-data.sql (demo data, destructive), recycled_products.xlsx (source of the demo products)
+database/                init-postgres.sql (schema), seed-data.sql (demo data, destructive), recycled_products.xlsx (spreadsheet of recycled-product data; not read by any code)
 docker/                  docker-compose.yml (PostgreSQL)
-docs/ai/                 module contracts and the remaining-work specification
+docs/ai/                 module contracts (contracts/), remaining-work specification, project requirements (.docx) and a diagram
 API.md, DATABASE.md      reference documentation
 CLAUDE.md                rules for AI coding agents
 ```
@@ -141,18 +155,22 @@ IDE run configuration).
 | `JWT_SECRET` | backend | **yes** | Signing key, at least 32 bytes. The backend refuses to start without it. Generate one with `openssl rand -base64 48`. |
 | `GOOGLE_CLIENT_ID` | backend | no | OAuth Web client ID. When empty, Google sign-in is disabled. |
 | `VITE_GOOGLE_CLIENT_ID` | frontend | no | The same client ID. Put it in `frontend/.env` (Vite reads env files from `frontend/`). |
+| `UPLOAD_DIR`, `SHIPPING_FLAT_FEE`, `FREE_SHIPPING_THRESHOLD` | backend | no | Upload directory and shipping rule (defaults in `application.properties`). |
+| `PAYMENT_VNPAY_TMN_CODE`, `PAYMENT_VNPAY_SECRET`, `PAYMENT_VNPAY_URL`, `PAYMENT_RETURN_URL` | backend | no | VNPay sandbox/production settings. Without the code and secret the `VNPAY` method fails closed (400). |
+| `PAYMENT_MOCK_ENABLED` | backend | no | Enables the development mock provider. **Defaults to `true` when unset**; set `false` outside development. |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_AUTH`, `SMTP_STARTTLS` | backend | no | Notification email. Without `SMTP_HOST` no email is sent. |
 | `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, `SPRING_DATASOURCE_PASSWORD` | backend | no | Override the database connection (see Database setup). |
 
-`.env.example` at the repository root lists the variable names; its `DB_*` entries are **not** read by the application. Never
+`.env.example` at the repository root lists every variable the code reads and marks the required one; its `DB_*` entries are **not** read by the application. Never
 commit a real `.env` file or real secrets.
 
 Without overrides the backend connects to `jdbc:postgresql://localhost:5432/ecogreen` as user `postgres` with the password set
-in `application.properties`, and listens on port **8081**. CORS allows the Vite dev server (`http://localhost:5173`).
+in `application.properties`, and listens on port **8081**. CORS allows only the Vite dev server (`http://localhost:5173`).
 
 ## Database setup
 
-The schema comes from `database/init-postgres.sql`. Newer structures (Google sign-in column, refresh tokens, permissions) are
-SQL files in `backend/src/main/resources/db/migration/`. **Flyway is not used**; apply the files yourself, in numeric order,
+The schema comes from `database/init-postgres.sql`. Everything added later (Google sign-in column, refresh tokens, permissions, catalogue, orders, inventory, discounts,
+payments, refunds, returns, addresses, analytics events, notifications) is in SQL files in `backend/src/main/resources/db/migration/` (`V2` to `V90`). **Flyway is not used**; apply the files yourself, in numeric order,
 **before the first backend start**. They are idempotent, so re-running them is safe.
 
 **1. Start PostgreSQL and load the schema** — choose one:
@@ -174,7 +192,7 @@ for f in $(ls backend/src/main/resources/db/migration/V*.sql | sort -V); do
 done
 ```
 
-On Windows, run the same files one by one with `psql ... -f <file>` in the order V2, V3, V4, V5, V6, V10, V11, V12, V20, V21, V22, V30, V31, V40, V41, V70.
+On Windows, run the same files one by one with `psql ... -f <file>` in this order: V2, V3, V4, V5, V6, V10, V11, V12, V20, V21, V22, V30, V31, V40, V41, V50, V51, V60, V70, V80, V90.
 `V5` renames the legacy `USER` role to `CUSTOMER` and `V6` seeds the permission catalogue and the role → permission mapping. Without them, the roles and permissions are incomplete.
 
 `V40` creates the `discounts` table and `V41` seeds the `discount:view` / `discount:manage` permissions for `ADMIN` and `MANAGER` (Flyway is not active; apply by hand).
@@ -182,6 +200,8 @@ On Windows, run the same files one by one with `psql ... -f <file>` in the order
 `V10`–`V12` add the catalogue columns, the product image table and the category tree (load `database/seed-data.sql` before them). Uploaded product images are stored in the directory given by `UPLOAD_DIR` (default `./uploads`, not committed).
 
 `V30` and `V31` introduce the stock model (`inventory` on hand / reserved and the `inventory_transactions` ledger) and **convert** the existing `products.stock_quantity` values. Apply them in this order with the backend **stopped** and before its first start with this version; the verification queries are in the file headers and in `docs/ai/contracts/B03-inventory.md`.
+
+`V50` and `V51` add the payment gateway fields and the `refunds` table, `V60` the full return model (several items, images, status history), `V80` the `analytics_events` table and `V90` the `notifications` table; details are in the contracts `B06`–`B10` and `DATABASE.md`.
 
 `V70` creates the `addresses` table (customer address book) with its foreign key and the "one default per user" unique index; it changes no existing data. Apply it before relying on that guarantee in the database; details in `docs/ai/contracts/B08-customer.md`.
 
@@ -215,11 +235,11 @@ Reload the page or sign in again; the admin link appears in the navbar.
 ```bash
 cd backend
 export JWT_SECRET="$(openssl rand -base64 48)"
-sh ./mvnw spring-boot:run          # Windows: .\mvnw.cmd spring-boot:run
+./mvnw spring-boot:run             # Windows: .\mvnw.cmd spring-boot:run
 ```
 
-`./mvnw` alone fails on Linux/macOS because the file is committed without the executable bit; use `sh ./mvnw` or
-`chmod +x mvnw`. The API is then available at `http://localhost:8081`.
+If `./mvnw` answers "Permission denied" (a checkout from before the executable bit was committed), run `chmod +x mvnw` or use
+`sh ./mvnw`. The API is then available at `http://localhost:8081`.
 On PowerShell set the secret with `$env:JWT_SECRET = '<at least 32 bytes>'`. A secret generated per shell session invalidates
 existing sign-ins when it changes; keep a stable value if you want sessions to survive restarts.
 
@@ -242,11 +262,11 @@ Open `http://localhost:5173`. The dev server proxies `/api` to `http://localhost
 
 ```bash
 # Backend unit tests
-cd backend && sh ./mvnw test
+cd backend && ./mvnw test
 
 # Frontend
 cd frontend
-npm run lint                           # currently reports 4 pre-existing errors on main
+npm run lint                           # ESLint
 npm run build                          # production build
 node scripts/verify-auth-refresh.mjs   # token-refresh logic, no network needed
 ```
@@ -259,24 +279,23 @@ add a product to the cart, check out, and open the order in the order history. A
 - **Backend exits at startup mentioning the JWT secret** — `JWT_SECRET` is missing or shorter than 32 bytes.
 - **`Connection refused` or `password authentication failed`** — the backend uses port 5432 and the `application.properties`
   password by default; with Docker set the `SPRING_DATASOURCE_*` variables (Database setup, step 3).
-- **`./mvnw: Permission denied`** — use `sh ./mvnw ...` or `chmod +x backend/mvnw`.
+- **`./mvnw: Permission denied`** — run `chmod +x backend/mvnw` or use `sh ./mvnw ...`.
 - **`npm ci` fails with "package.json and package-lock.json are not in sync"** — use `npm install`.
 - **Vite fails to start with a Node engine error** — upgrade to Node 20.19+ or 22.12+.
 - **Google button is disabled, or Google sign-in answers 503** — set `VITE_GOOGLE_CLIENT_ID` in `frontend/.env` (and rebuild/restart
   Vite) and `GOOGLE_CLIENT_ID` for the backend, using the same Web client ID.
-- **Roles look wrong or the admin menu is missing** — make sure migrations `V4`–`V6` were applied and that the user has the
+- **Roles look wrong or the admin menu is missing** — make sure migrations `V4`–`V6` (and `V41` for the discount permissions) were applied and that the user has the
   `ADMIN` role, then sign in again.
 - **HTTP 429 on sign-in** — five failed attempts per username and IP lock sign-in for 15 minutes.
 - **The storefront is empty** — there are no products yet; add them as admin or load `database/seed-data.sql` on a disposable DB.
 
 ## Development notes
 
-- Only `/api/v1/auth/*` follows the new API convention (`{ data, meta }` success, `{ error }` failure); the other `/api/**`
-  endpoints are older and return plain JSON. The rules for moving them are in [`CLAUDE.md`](./CLAUDE.md).
+- Every endpoint under `/api/v1` follows the new API convention (`{ data, meta }` success, `{ error }` failure). Only the five
+  legacy `/api/admin` endpoints return plain JSON. The rules for API changes are in [`CLAUDE.md`](./CLAUDE.md).
 - Permission codes live in one class, `security/Permissions.java`. Roles and their permissions are stored in the database.
 - Hibernate runs with `ddl-auto=update` in development, so the entities and the SQL files must be kept consistent.
-- Reference: [`API.md`](./API.md) (endpoints), [`DATABASE.md`](./DATABASE.md) (tables), `docs/ai/contracts/` (authentication,
-  API foundation and RBAC contracts).
+- Reference: [`API.md`](./API.md) (endpoints), [`DATABASE.md`](./DATABASE.md) (tables), `docs/ai/contracts/` (one contract per module).
 
 ## Contributing
 

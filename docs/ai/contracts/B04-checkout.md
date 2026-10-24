@@ -44,7 +44,7 @@ A preview never throws for a problem it can describe; an invalid code yields dis
 | `addressId` | optional; an address of the caller (`AddressService.getOwned`; someone else's → 403 `FORBIDDEN`, unknown → 404) |
 | `customerName`, `customerPhone`, `shippingAddress` | required together when `addressId` is absent (≤ 100 / 20 / 500) |
 | `discountCode` | optional, case-insensitive |
-| `paymentMethod` | `COD` (default), `VIETQR`, `MOMO`; anything else → 400 `VALIDATION_ERROR` |
+| `paymentMethod` | required: `COD`, `VIETQR`, `MOMO` or `VNPAY` (case-insensitive); missing or anything else → 400 `VALIDATION_ERROR` |
 
 Only these fields are read. Prices, totals, user ids and any other property sent by the client are ignored. Either way the
 recipient is copied into the order (`orders.customer_name`, `customer_phone`, `shipping_address`); the order never
@@ -134,9 +134,8 @@ public static String requireSupportedMethod(String method)
 
 ## 6. TEMPORARY-COMPAT
 
-- `PaymentService.createPendingPayment` and `SUPPORTED_METHODS` (`COD`, `VIETQR`, `MOMO`): the payment row used to be
-  created inside the legacy `OrderService.checkout`. B06 owns payments and replaces the method list and the row creation
-  when it introduces real providers.
+None left. `PaymentService.createPendingPayment` and `SUPPORTED_METHODS` (`COD`, `VIETQR`, `MOMO`, `VNPAY`) belong to B06
+(`B06-payment.md`).
 
 Removed by this module: `POST /api/orders`, `/api/cart/*`, `OrderService.checkout`, `OrderService.getItems`.
 

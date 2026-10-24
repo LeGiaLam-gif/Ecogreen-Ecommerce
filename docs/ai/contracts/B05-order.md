@@ -1,4 +1,4 @@
-# Contract: B05 — Order (state machine, status history, inventory port, safe legacy checkout)
+# Contract: B05 — Order (state machine, status history, inventory port)
 
 Owner: B05. Depends on: B01-F1 (`/api/v1` envelope, `ApiPaging`), B01-P3 (permission constants). Migrations: `V20`, `V21`, `V22`.
 
@@ -40,8 +40,7 @@ Public Java signatures (`service/OrderService`):
 
 ## 3. Inventory port
 
-`service/inventory/InventoryGateway`: `reserve`, `release`, `commit`, `restock`, `available`. B05 ships `LegacyStockInventoryGateway`
-over `products.stock_quantity` (atomic `UPDATE ... WHERE stock_quantity >= ?`, products locked in id order). B03 replaces the adapter.
+`service/inventory/InventoryGateway`: `reserve`, `release`, `commit`, `restock`, `available`. The only implementation is `service/inventory/InventoryService` (B03, see `B03-inventory.md`).
 
 | Transition | Effect |
 |---|---|
@@ -80,15 +79,13 @@ caller; the frontend must render them and never compute transitions itself.
 
 ## 6. Legacy compatibility
 
-- `POST /api/orders` is kept (creates the order in `PENDING_PAYMENT`, reserves stock, writes the first history row). TEMPORARY-COMPAT(B05): B04 replaces it.
-- `GET /api/orders`, `/my`, `/{id}` and `PUT /api/orders/{id}/status` were removed; the frontend uses `/api/v1`.
-- `POST /api/payments/order/{id}/pay` marks the order `PAID` through `transitionStatus`; it rejects an order that is not `PENDING_PAYMENT`. TEMPORARY-COMPAT(B05): B06 replaces the mock.
-- `PaymentController` still uses `OrderService.getOwnedOrAdmin` until B06.
-- `ReturnRequestService` accepts an order in `PAID` or `DELIVERED`.
+None left in this module. Orders are created only by `POST /api/v1/checkout` (B04, `B04-checkout.md`); the former `POST /api/orders`,
+`GET /api/orders*`, `PUT /api/orders/{id}/status` and the `/api/payments/order/{id}/pay` mock are removed. Payments are owned by
+B06 (`B06-payment.md`) and returns by B07 (`B07-return.md`, `ReturnService` accepts `DELIVERED` orders only).
 
 ## 7. Decisions applied
 
-D-4: legacy `PAID` orders stay `PAID`. D-7: a legacy cash-on-delivery confirmation still goes through `payNow`.
+D-4: legacy `PAID` orders stay `PAID`.
 
 ## Requests for contract changes
 

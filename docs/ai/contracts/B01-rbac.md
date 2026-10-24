@@ -8,12 +8,12 @@ was updated after P3 to match (see section 11).
 Final roles: `CUSTOMER` (renamed from `USER`), `MANAGER`, `ADMIN`. `Role.USER` no longer exists in code; the constants are
 `Role.CUSTOMER`, `Role.MANAGER`, `Role.ADMIN`. `DataLoader` seeds exactly these three and never re-creates `USER`.
 
-## 2. Permission catalogue (27 codes)
+## 2. Permission catalogue (29 codes)
 
 The **only** place codes are defined in Java is `security/Permissions.java` (constants such as `Permissions.PRODUCT_CREATE`,
 the list `Permissions.ALL`). No permission string literal may appear elsewhere in Java application code
-(`PermissionsCatalogueTest.permissionLiterals_areOnlyDefinedInThePermissionsCatalogue` enforces it). The SQL copy in
-`V6__seed_permissions.sql` is checked against it by `PermissionsCatalogueTest.v6Seed_matchesJavaCatalogue_noDrift`.
+(`PermissionsCatalogueTest.permissionLiterals_areOnlyDefinedInThePermissionsCatalogue` enforces it). The SQL copies in
+`V6__seed_permissions.sql` (27 codes) and `V41__discount_permissions.sql` (the two discount codes) are checked against it by `PermissionsCatalogueTest`.
 
 | Resource | Codes |
 |---|---|
@@ -24,14 +24,15 @@ the list `Permissions.ALL`). No permission string literal may appear elsewhere i
 | payment | `payment:view`, `payment:confirm`, `payment:refund` |
 | return | `return:view`, `return:process` |
 | user | `user:view`, `user:update`, `user:disable` |
+| discount | `discount:view`, `discount:manage` (added by B04, `V41`) |
 | other | `analytics:view`, `audit:view`, `system:configure` |
 
 ## 3. Role → permission mapping
 
 | Role | Permissions |
 |---|---|
-| `ADMIN` | all 27 |
-| `MANAGER` | 24: all except `system:configure`, `audit:view`, `user:disable` (owner decision D-6, default) |
+| `ADMIN` | all 29 |
+| `MANAGER` | 26: all except `system:configure`, `audit:view`, `user:disable` (owner decision D-6, default) |
 | `CUSTOMER` | none — customer rights are ownership-based (own cart/orders), not permission-based |
 
 `Permissions.forRole(roleName)` documents this mapping for tests; runtime authorization never uses it, only the
@@ -53,7 +54,7 @@ Legacy, unchanged behaviour, now `@Deprecated`:
 @Deprecated public void requireAdmin(HttpServletRequest request)   // 401 / 403 unless role ADMIN
 @Deprecated public boolean isAdmin(HttpServletRequest request)
 ```
-Removal condition: every controller migrated (end of B12). `requireUser(request)` is unchanged.
+Still used by the legacy `AdminController` and `StatsController` (five handlers). Removal condition: those endpoints are migrated. `requireUser(request)` is unchanged.
 
 ## 5. `CurrentUser` (security/CurrentUser)
 
@@ -101,7 +102,7 @@ demonstrated by this implementation (see "Open blocker" below).**
 * **Persistence coupling (documented):** `UserResponse.from(User)` and `JwtService.issueAccessToken(User)` depend on
   `Role.permissions` being initialised. It always is while the mapping stays EAGER.
 * **Why it is not measured:** Maven Central and the other Maven mirrors are unreachable from the authoring sandbox
-  (`x-deny-reason: host_not_allowed`), `backend/mvnw` is not executable, and no Hibernate/Spring jars are available offline. To
+  (`x-deny-reason: host_not_allowed`), and no Hibernate/Spring jars are available offline. To
   measure, run `AuthController` login/google/refresh against PostgreSQL with `spring.jpa.show-sql=true` (or
   `hibernate.generate_statistics=true`) and count statements.
 
@@ -125,10 +126,10 @@ below; none was implemented because each either touches `AuthService`/`AuthContr
 * Permission data comes from the database through the token, never from the client; the frontend's `hasPermission` is UX only.
 * **A removed role or permission stays effective until the current access token expires (≤ 15 min)**; a refresh issues a token
   with the new permissions. Deactivated users are still rejected immediately by `AuthInterceptor` (B01-P2, unchanged).
-* **MANAGER compatibility limitation:** every endpoint that still calls `requireAdmin()` denies a `MANAGER` (403) until its
-  owning module migrates it to `requirePermission`. The frontend admin area (`ProtectedRoute adminOnly`, Navbar,
-  `Login.jsx`/`Register.jsx` redirects) still keys on `ADMIN` and is outside P3's allowed files, so a MANAGER cannot yet use it.
-* The admin user list (`GET /api/users`, owned by B08) maps users with `UserResponse::from`, so it now also carries each
+* **MANAGER limitation:** the five legacy endpoints (`GET /api/admin/stats` and `GET /api/admin/reports/*`) call `requireAdmin()`
+  and deny a `MANAGER` (403), so the sales dashboard is ADMIN-only. The admin area itself is open to `ADMIN` and `MANAGER`
+  (`ProtectedRoute staffOnly`, Navbar `isStaff`); `Login.jsx` still redirects only an `ADMIN` to `/admin` after login.
+* The admin user list (`GET /api/v1/admin/users`, owned by B08) maps users with `UserResponse::from`, so it also carries each
   user's real permissions.
 
 ## 9. Database migrations (manual — Flyway is NOT active)
@@ -140,7 +141,7 @@ Apply in this order: **V4 → V5 → V6**. Other orders are not supported. All a
 |---|---|
 | `V4__permissions.sql` | `permissions(id, code UNIQUE, description)`, `role_permissions(role_id, permission_id)` composite PK, FKs `ON DELETE CASCADE`, index on `role_permissions(permission_id)` (reverse lookup; the PK already serves `role_id` joins) |
 | `V5__roles_customer_manager.sql` | guarded `USER` → `CUSTOMER` (see below), ensures `MANAGER` |
-| `V6__seed_permissions.sql` | 27 catalogue rows + ADMIN (27) / MANAGER (24) mappings; CUSTOMER none |
+| `V6__seed_permissions.sql` | 27 catalogue rows + ADMIN (27) / MANAGER (24) mappings; CUSTOMER none. `V41` adds the two discount codes (ADMIN 29, MANAGER 26) |
 
 **USER → CUSTOMER:** only `USER` exists → renamed in place (same `roles.id`, every `user_roles` link kept). Both exist (e.g. the
 new `DataLoader` ran first) → links are moved to `CUSTOMER` without PK duplicates, then `USER` is deleted. Neither exists →
@@ -162,7 +163,7 @@ SELECT ur.user_id, ur.role_id FROM user_roles ur
  WHERE r.id IS NULL OR u.id IS NULL;
 -- 3b. users that ended up with no role at all (expect 0 rows)
 SELECT u.id, u.username FROM users u LEFT JOIN user_roles ur ON ur.user_id = u.id WHERE ur.user_id IS NULL;
--- 4. permission counts (expect permissions = 27; ADMIN 27, MANAGER 24, CUSTOMER 0)
+-- 4. permission counts (after V6 and V41: permissions = 29; ADMIN 29, MANAGER 26, CUSTOMER 0)
 SELECT count(*) AS permissions FROM permissions;
 SELECT r.name, count(rp.permission_id) AS permission_count
   FROM roles r LEFT JOIN role_permissions rp ON rp.role_id = r.id GROUP BY r.name ORDER BY r.name;
