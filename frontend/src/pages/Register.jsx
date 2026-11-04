@@ -1,8 +1,11 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { getGoogleClientId, renderGoogleSignInButton } from '../services/googleAuth';
+import SocialAuthButtons from '../components/SocialAuthButtons';
+import { authErrorMessage, passwordProblem } from '../utils/authErrors';
 import './Login.css';
+
+const USERNAME_RULE = /^[A-Za-z0-9_.]{3,50}$/;
 
 const Register = () => {
   const [username, setUsername] = useState('');
@@ -13,25 +16,28 @@ const Register = () => {
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [googleLoading, setGoogleLoading] = useState(false);
-  const [googleUnavailable, setGoogleUnavailable] = useState(!getGoogleClientId());
-  const googleBtnRef = useRef(null);
 
-  const { register, loginWithGoogle } = useAuth();
+  const { register } = useAuth();
   const navigate = useNavigate();
+
+  const goHome = (user) => navigate(user.roles?.includes('ADMIN') ? '/admin' : '/');
 
   const handleStandardRegister = async (e) => {
     e.preventDefault();
     setError('');
     setSuccessMsg('');
 
-    if (password !== confirmPassword) {
-      setError('Mật khẩu xác nhận không khớp.');
+    if (!USERNAME_RULE.test(username.trim())) {
+      setError('Tên đăng nhập gồm 3–50 ký tự: chữ cái không dấu, số, dấu gạch dưới hoặc dấu chấm (không có khoảng trắng hay @).');
       return;
     }
-
-    if (password.length < 6) {
-      setError('Mật khẩu phải có ít nhất 6 ký tự.');
+    const problem = passwordProblem(password);
+    if (problem) {
+      setError(problem);
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError('Mật khẩu xác nhận không khớp.');
       return;
     }
 
@@ -43,40 +49,11 @@ const Register = () => {
         navigate('/login');
       }, 1500);
     } catch (err) {
-      setError(err.friendlyMessage || err.response?.data?.message || 'Đăng ký thất bại. Tên đăng nhập hoặc email đã tồn tại.');
+      setError(authErrorMessage(err, 'Đăng ký thất bại. Vui lòng thử lại.'));
     } finally {
       setSubmitting(false);
     }
   };
-
-  // Google returns a signed ID token; the backend verifies it. Only the token is sent.
-  const handleGoogleIdToken = async (idToken) => {
-    setGoogleLoading(true);
-    setError('');
-    try {
-      const user = await loginWithGoogle(idToken);
-      navigate(user.roles?.includes('ADMIN') ? '/admin' : '/');
-    } catch (err) {
-      setError(err.friendlyMessage || err.response?.data?.message || 'Đăng ký qua Google không thành công. Vui lòng thử lại.');
-    } finally {
-      setGoogleLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!googleBtnRef.current || !getGoogleClientId()) return;
-    renderGoogleSignInButton(googleBtnRef.current, {
-      onIdToken: handleGoogleIdToken,
-      onError: () => setError('Đăng ký qua Google không thành công. Vui lòng thử lại.'),
-      text: 'signup_with'
-    }).catch(() => setGoogleUnavailable(true));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const handleFacebookClick = () => {
-    alert('Tính năng đăng nhập Facebook đang được bảo trì theo quy định bảo mật Meta. Vui lòng chọn "Đăng ký bằng Google" để khởi tạo tài khoản tức thì!');
-  };
-
 
   return (
     <div className="shopee-auth-page">
@@ -122,7 +99,7 @@ const Register = () => {
             </div>
 
             {error && (
-              <div className="shopee-alert-box error">
+              <div className="shopee-alert-box error" role="alert">
                 <span className="alert-icon">⚠️</span>
                 <span>{error}</span>
               </div>
@@ -136,27 +113,8 @@ const Register = () => {
             )}
 
             {/* Social Fast Signup */}
-            <div className="shopee-social-row" style={{ marginBottom: '8px' }}>
-              <button
-                type="button"
-                className="shopee-social-btn btn-facebook"
-                onClick={handleFacebookClick}
-              >
-                <svg className="social-icon" viewBox="0 0 24 24" width="20" height="20" fill="#1877F2">
-                  <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
-                </svg>
-                <span>Facebook</span>
-              </button>
-
-              <div className="google-signin-slot" style={{ flex: 1, minWidth: 0, display: 'flex', justifyContent: 'center' }}>
-                {googleUnavailable ? (
-                  <button type="button" className="shopee-social-btn btn-google" disabled title="Đăng nhập Google chưa được cấu hình">
-                    <span>Google (chưa khả dụng)</span>
-                  </button>
-                ) : (
-                  <div ref={googleBtnRef} aria-busy={googleLoading} />
-                )}
-              </div>
+            <div style={{ marginBottom: '8px' }}>
+              <SocialAuthButtons googleText="signup_with" onSuccess={goHome} onError={setError} />
             </div>
 
             {/* Shopee Divider: HOẶC */}
@@ -171,6 +129,8 @@ const Register = () => {
                 <input
                   type="text"
                   placeholder="Tên đăng nhập (viết liền không dấu)"
+                  autoComplete="username"
+                  maxLength={50}
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   className="shopee-input"
@@ -182,6 +142,8 @@ const Register = () => {
                 <input
                   type="email"
                   placeholder="Địa chỉ Email"
+                  autoComplete="email"
+                  maxLength={100}
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="shopee-input"
@@ -192,7 +154,8 @@ const Register = () => {
               <div className="shopee-input-group password-group">
                 <input
                   type={showPassword ? 'text' : 'password'}
-                  placeholder="Thiết lập Mật khẩu (tối thiểu 6 ký tự)"
+                  placeholder="Mật khẩu (tối thiểu 8 ký tự)"
+                  autoComplete="new-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="shopee-input"
@@ -225,6 +188,7 @@ const Register = () => {
                 <input
                   type={showPassword ? 'text' : 'password'}
                   placeholder="Xác nhận lại Mật khẩu"
+                  autoComplete="new-password"
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   className="shopee-input"
@@ -244,7 +208,7 @@ const Register = () => {
 
             {/* Terms disclaimer */}
             <p className="shopee-legal-note">
-              Bằng việc đăng ký, bạn xác nhận đã đồng ý với <Link to="/policy/returns">Điều khoản dịch vụ</Link> & <Link to="/contact">Chính sách bảo mật</Link> của EcoGreen.
+              Bằng việc đăng ký, bạn xác nhận đã đồng ý với <Link to="/terms">Điều khoản dịch vụ</Link> & <Link to="/privacy">Chính sách bảo mật</Link> của EcoGreen.
             </p>
 
             {/* Switch to Login */}

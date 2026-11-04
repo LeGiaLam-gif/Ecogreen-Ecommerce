@@ -49,25 +49,35 @@ export const AuthProvider = ({ children }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const startSession = (data) => {
-    saveSession(data);
+  // `remember`: true -> the session survives closing the browser (localStorage); false -> this tab only (sessionStorage).
+  const startSession = (data, remember = true) => {
+    saveSession(data, remember);
     setUser(data.user);
     return data.user;
   };
 
-  const login = async (username, password) => {
+  const login = async (username, password, remember = true) => {
     setLoading(true);
     try {
-      return startSession(await authApi.login(username, password));
+      return startSession(await authApi.login(username, password), remember);
     } finally {
       setLoading(false);
     }
   };
 
-  const loginWithGoogle = async (idToken) => {
+  const loginWithGoogle = async (idToken, remember = true) => {
     setLoading(true);
     try {
-      return startSession(await authApi.loginWithGoogle(idToken));
+      return startSession(await authApi.loginWithGoogle(idToken), remember);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loginWithFacebook = async (accessToken, remember = true) => {
+    setLoading(true);
+    try {
+      return startSession(await authApi.loginWithFacebook(accessToken), remember);
     } finally {
       setLoading(false);
     }
@@ -111,6 +121,7 @@ export const AuthProvider = ({ children }) => {
         loading,
         login,
         loginWithGoogle,
+        loginWithFacebook,
         register,
         logout
       }}

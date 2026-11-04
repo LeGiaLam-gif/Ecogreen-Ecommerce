@@ -59,7 +59,12 @@ const normaliseError = (error) => {
   const status = error?.response?.status;
   const apiError = isV1Request(error?.config) ? error?.response?.data?.error : null;
 
+  // Spring answers a blocked cross-origin call with a plain-text 403 "Invalid CORS request" (no JSON envelope).
+  const corsRejected = status === 403 && typeof error?.response?.data === 'string' && /invalid cors request/i.test(error.response.data);
+
   const message =
+    (corsRejected &&
+      'Máy chủ từ chối địa chỉ trang web này (CORS). Hãy mở ứng dụng bằng địa chỉ đã được cấp phép (ví dụ http://localhost:5173) hoặc thêm địa chỉ vào CORS_ALLOWED_ORIGINS của backend.') ||
     (apiError && apiError.message) ||
     error?.response?.data?.message ||
     (status === 401 && 'Vui lòng đăng nhập để tiếp tục.') ||
@@ -80,7 +85,7 @@ const normaliseError = (error) => {
 // ── Access-token refresh (B01-P2) ────────────────────────────────────────────
 
 // These endpoints never trigger a refresh (a 401 there is the real answer).
-const NO_REFRESH_PATH = /^\/api\/v1\/auth\/(login|register|google|refresh|logout)\/?$/;
+const NO_REFRESH_PATH = /^\/api\/v1\/auth\/(login|register|google|facebook|forgot-password|reset-password|refresh|logout)\/?$/;
 
 // A bare axios instance (no interceptors) so a failing refresh can never recurse into itself.
 const refreshClient = axios.create({ baseURL: API_BASE_URL });

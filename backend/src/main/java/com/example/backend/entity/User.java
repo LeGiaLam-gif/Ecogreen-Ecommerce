@@ -27,6 +27,10 @@ public class User {
     @Column(name = "google_sub", length = 64)
     private String googleSub;
 
+    // Facebook user id verified by the server (Graph API). Null unless the account was created through Facebook login.
+    @Column(name = "facebook_id", length = 64)
+    private String facebookId;
+
     @Column(name = "is_active", nullable = false)
     private boolean active = true;
 
@@ -69,6 +73,9 @@ public class User {
 
     public String getGoogleSub() { return googleSub; }
     public void setGoogleSub(String googleSub) { this.googleSub = googleSub; }
+
+    public String getFacebookId() { return facebookId; }
+    public void setFacebookId(String facebookId) { this.facebookId = facebookId; }
 
     public boolean isActive() { return active; }
     public void setActive(boolean active) { this.active = active; }

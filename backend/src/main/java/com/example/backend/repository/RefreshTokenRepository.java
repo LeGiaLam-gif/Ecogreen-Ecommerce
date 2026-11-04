@@ -22,6 +22,11 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
     @Query("update RefreshToken t set t.replacedById = :newId where t.id = :id")
     int markReplaced(@Param("id") Long id, @Param("newId") Long newId);
 
+    /** Password reset: end every session of the user (all families). */
+    @Modifying(clearAutomatically = true)
+    @Query("update RefreshToken t set t.revoked = true where t.userId = :userId and t.revoked = false")
+    int revokeAllForUser(@Param("userId") Long userId);
+
     /** Reuse detection: revoke every token of the family. */
     @Modifying(clearAutomatically = true)
     @Query("update RefreshToken t set t.revoked = true where t.familyId = :familyId and t.revoked = false")

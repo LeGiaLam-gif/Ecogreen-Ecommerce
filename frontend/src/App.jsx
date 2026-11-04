@@ -8,6 +8,10 @@ import Home from './pages/Home';
 import ProductDetail from './pages/ProductDetail';
 import Login from './pages/Login';
 import Register from './pages/Register';
+import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
+import Terms from './pages/Terms';
+import PrivacyPolicy from './pages/PrivacyPolicy';
 import Cart from './pages/Cart';
 import Checkout from './pages/Checkout';
 import Payment from './pages/Payment';
@@ -44,12 +48,16 @@ function AppContent() {
           <Route path="/product/:id" element={<ProductDetail />} />
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/cart" element={<Cart />} />
 
           {/* CSKH & Chính sách - không cần đăng nhập */}
           <Route path="/faq" element={<FAQ />} />
           <Route path="/contact" element={<ContactUs />} />
           <Route path="/policy/returns" element={<ReturnPolicy />} />
+          <Route path="/terms" element={<Terms />} />
+          <Route path="/privacy" element={<PrivacyPolicy />} />
 
           <Route path="/checkout" element={<ProtectedRoute><Checkout /></ProtectedRoute>} />
           <Route path="/payment/return" element={<ProtectedRoute><PaymentReturn /></ProtectedRoute>} />

@@ -27,6 +27,12 @@ globalThis.localStorage = {
   setItem: (k, v) => { store[k] = String(v); },
   removeItem: (k) => { delete store[k]; }
 };
+const sessionStore = {}; // B01: "Duy trì đăng nhập" off -> sessionStorage
+globalThis.sessionStorage = {
+  getItem: (k) => (k in sessionStore ? sessionStore[k] : null),
+  setItem: (k, v) => { sessionStore[k] = String(v); },
+  removeItem: (k) => { delete sessionStore[k]; }
+};
 let redirectedTo = null;
 globalThis.window = { location: { pathname: '/orders', assign: (u) => { redirectedTo = u; } } };
 
@@ -63,7 +69,8 @@ axios.defaults.adapter = async (config) => {
     if (refreshMode === 'network') { const e = new Error('Network Error'); e.code = 'ERR_NETWORK'; e.config = config; throw e; }
     return respond(config, Number(refreshMode), { error: { code: 'X', message: 'refresh failed' } });
   }
-  if (url === '/api/v1/auth/login') {
+  if (url === '/api/v1/auth/cors-test') return respond(config, 403, 'Invalid CORS request'); // Spring's plain-text CORS rejection
+  if (/^\/api\/v1\/auth\/(login|facebook|forgot-password|reset-password)$/.test(url)) {
     return respond(config, 401, { error: { code: 'UNAUTHENTICATED', message: 'bad credentials' } });
   }
   if (auth === `Bearer ${jwt(2)}`) return respond(config, 200, url.startsWith('/api/v1') ? { data: { ok: url }, meta: null } : [{ id: 1 }]);
@@ -142,6 +149,35 @@ const login = await attempt(() => http.post('/v1/auth/login', { username: 'a', p
 check('401 from /auth/login never triggers refresh or redirect',
   refreshCalls === 0 && redirectedTo === null && login.error?.code === 'UNAUTHENTICATED' && login.error?.friendlyMessage === 'bad credentials',
   JSON.stringify({ refreshCalls, redirectedTo, code: login.error?.code }));
+
+// B01: the other public auth endpoints behave like login (a 401 there is the real answer)
+for (const endpoint of ['facebook', 'forgot-password', 'reset-password']) {
+  reset('ok');
+  const res = await attempt(() => http.post(`/v1/auth/${endpoint}`, {}));
+  check(`401 from /auth/${endpoint} never triggers refresh or redirect`,
+    refreshCalls === 0 && redirectedTo === null && !!res.error, JSON.stringify({ refreshCalls, redirectedTo }));
+}
+
+// B01: a blocked cross-origin call is explained instead of being shown as "no permission"
+reset('ok');
+const cors = await attempt(() => http.post('/v1/auth/cors-test', {}));
+check('403 "Invalid CORS request" gets a CORS-specific message', /CORS/.test(cors.error?.friendlyMessage || ''), cors.error?.friendlyMessage);
+
+// B01: remember me
+const hasKeys = (st) => ['accessToken', 'refreshToken', 'user'].filter((k) => st.getItem(k) !== null).length;
+storage.clearSession();
+storage.saveSession({ accessToken: jwt(2), refreshToken: 'r-1', user: { id: 1 } }, false);
+check('remember=false stores the session in sessionStorage only',
+  hasKeys(sessionStorage) === 3 && hasKeys(localStorage) === 0 && storage.getAccessToken() === jwt(2) && storage.getStoredUser()?.id === 1);
+storage.saveTokens({ accessToken: jwt(3), refreshToken: 'r-2' });
+check('a token refresh writes back to the store that holds the session',
+  sessionStorage.getItem('accessToken') === jwt(3) && localStorage.getItem('accessToken') === null);
+storage.saveSession({ accessToken: jwt(2), refreshToken: 'r-3', user: { id: 1 } }, true);
+check('remember=true moves the session to localStorage and leaves nothing in sessionStorage',
+  hasKeys(localStorage) === 3 && hasKeys(sessionStorage) === 0);
+storage.saveSession({ accessToken: jwt(2), refreshToken: 'r-4', user: { id: 1 } }, false);
+storage.clearSession();
+check('clearSession empties both stores', hasKeys(localStorage) === 0 && hasKeys(sessionStorage) === 0);
 
 // legacy storage purge
 localStorage.setItem('token', '3f2b8c1e-5a4d-4e0b-9a52-0c3d6f7e8a91');

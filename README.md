@@ -67,7 +67,7 @@ role are the five legacy ones under `/api/admin` (`/stats` and the four `/report
 - Payments: no gateway other than VNPay (and the development mock); MoMo and VietQR exist only as static QR codes in the UI.
   Refunds are recorded by staff; nothing is refunded automatically at the gateway. Expired `PENDING_PAYMENT` orders are not cancelled automatically.
 - Screens: no admin screen to change a user's roles (the API exists), no screen for the analytics events list, no customer-facing notification list.
-- Accounts: no password reset and no email verification.
+- Accounts: password reset by e-mail (needs `SMTP_*`), sign-in with Google and Facebook; no e-mail verification at registration.
 - Operations: no audit log, no Docker image for the application, no CI pipeline, no health/metrics endpoints, no frontend tests.
 - The five legacy `/api/admin` endpoints still use the older API shape.
 
@@ -153,19 +153,27 @@ IDE run configuration).
 | Variable | Used by | Required | Meaning |
 |---|---|---|---|
 | `JWT_SECRET` | backend | **yes** | Signing key, at least 32 bytes. The backend refuses to start without it. Generate one with `openssl rand -base64 48`. |
+| `DB_PASSWORD` | backend, docker | **yes** | PostgreSQL password. No default exists. `DB_HOST` (localhost), `DB_PORT` (5432), `DB_NAME` (ecogreen) and `DB_USERNAME` (postgres) are optional. |
+| `CORS_ALLOWED_ORIGINS` | backend | no | Origin patterns allowed to call the API, comma separated. Default: any `localhost` / `127.0.0.1` port. In production set the exact site origin. A wrong origin shows up as `403 Invalid CORS request`. |
+| `APP_PUBLIC_URL` | backend | no | Public frontend URL used in the password-reset link (default `http://localhost:5173`). |
 | `GOOGLE_CLIENT_ID` | backend | no | OAuth Web client ID. When empty, Google sign-in is disabled. |
+| `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET`, `FACEBOOK_GRAPH_VERSION` | backend | no | Facebook Login (Meta for Developers). Empty id or secret disables it (503). Never commit the secret. |
+| `VITE_FACEBOOK_APP_ID` | frontend | no | The same App ID (public). Put it in `frontend/.env`. |
 | `VITE_GOOGLE_CLIENT_ID` | frontend | no | The same client ID. Put it in `frontend/.env` (Vite reads env files from `frontend/`). |
 | `UPLOAD_DIR`, `SHIPPING_FLAT_FEE`, `FREE_SHIPPING_THRESHOLD` | backend | no | Upload directory and shipping rule (defaults in `application.properties`). |
 | `PAYMENT_VNPAY_TMN_CODE`, `PAYMENT_VNPAY_SECRET`, `PAYMENT_VNPAY_URL`, `PAYMENT_RETURN_URL` | backend | no | VNPay sandbox/production settings. Without the code and secret the `VNPAY` method fails closed (400). |
 | `PAYMENT_MOCK_ENABLED` | backend | no | Enables the development mock provider. **Defaults to `true` when unset**; set `false` outside development. |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_AUTH`, `SMTP_STARTTLS` | backend | no | Notification email. Without `SMTP_HOST` no email is sent. |
-| `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, `SPRING_DATASOURCE_PASSWORD` | backend | no | Override the database connection (see Database setup). |
+| `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, `SPRING_DATASOURCE_PASSWORD` | backend | no | Override the whole database connection (they win over the `DB_*` variables). |
 
-`.env.example` at the repository root lists every variable the code reads and marks the required one; its `DB_*` entries are **not** read by the application. Never
-commit a real `.env` file or real secrets.
+`.env.example` at the repository root lists every variable the code reads. Never commit a real `.env` file or real secrets.
 
-Without overrides the backend connects to `jdbc:postgresql://localhost:5432/ecogreen` as user `postgres` with the password set
-in `application.properties`, and listens on port **8081**. CORS allows only the Vite dev server (`http://localhost:5173`).
+The backend connects to `jdbc:postgresql://${DB_HOST}:${DB_PORT}/${DB_NAME}` (default `localhost:5432/ecogreen`) as `DB_USERNAME` (default `postgres`) with `DB_PASSWORD`,
+and listens on port **8081**. CORS follows `CORS_ALLOWED_ORIGINS` (default: any localhost port).
+
+**Forgot password and email.** `POST /api/v1/auth/forgot-password` mails a 30-minute, single-use link. It needs `SMTP_*`; with `SMTP_HOST` empty nothing is sent. For development use
+Gmail with an App Password (`smtp.gmail.com`, port 587) or MailHog (`SMTP_AUTH=false`). **Facebook Login:** create an app in Meta for Developers, add *Facebook Login*, put `http://localhost:5173` in the allowed
+domains; in Development mode only app roles (admin, developer, tester) can sign in, and going Live needs a public Privacy Policy URL (the app serves `/privacy`) and data-deletion instructions.
 
 ## Database setup
 
@@ -176,23 +184,23 @@ payments, refunds, returns, addresses, analytics events, notifications) is in SQ
 **1. Start PostgreSQL and load the schema** — choose one:
 
 ```bash
-# A) Docker (port 5433 on the host; init-postgres.sql runs automatically on the first start of an empty volume)
-cd docker && docker compose up -d && cd ..
+# A) Docker (port DB_PORT, default 5432, on the host; DB_PASSWORD is required; init-postgres.sql runs automatically on the first start of an empty volume)
+cd docker && docker compose --env-file ../.env up -d && cd ..
 
 # B) Local PostgreSQL (port 5432)
 createdb -U postgres ecogreen
 psql -U postgres -d ecogreen -f database/init-postgres.sql
 ```
 
-**2. Apply the migrations in order** (adjust host/port: `-p 5433` for Docker, `-p 5432` for a local server):
+**2. Apply the migrations in order** (adjust host/port: `-p $DB_PORT`):
 
 ```bash
 for f in $(ls backend/src/main/resources/db/migration/V*.sql | sort -V); do
-  psql -h localhost -p 5433 -U postgres -d ecogreen -v ON_ERROR_STOP=1 -f "$f"
+  psql -h localhost -p "${DB_PORT:-5432}" -U postgres -d ecogreen -v ON_ERROR_STOP=1 -f "$f"
 done
 ```
 
-On Windows, run the same files one by one with `psql ... -f <file>` in this order: V2, V3, V4, V5, V6, V10, V11, V12, V20, V21, V22, V30, V31, V40, V41, V50, V51, V60, V70, V80, V90.
+On Windows, run the same files one by one with `psql ... -f <file>` in this order: V2, V3, V4, V5, V6, V7, V8, V10, V11, V12, V20, V21, V22, V30, V31, V40, V41, V50, V51, V60, V70, V80, V90.
 `V5` renames the legacy `USER` role to `CUSTOMER` and `V6` seeds the permission catalogue and the role → permission mapping. Without them, the roles and permissions are incomplete.
 
 `V40` creates the `discounts` table and `V41` seeds the `discount:view` / `discount:manage` permissions for `ADMIN` and `MANAGER` (Flyway is not active; apply by hand).
@@ -207,13 +215,13 @@ On Windows, run the same files one by one with `psql ... -f <file>` in this orde
 
 `V20` re-labels stored orders (`PENDING` → `PENDING_PAYMENT`, `CONFIRMED` → `PROCESSING`) and widens the status check. Stop the old backend before applying it and back up `orders` first.
 
-**3. Point the backend at the right database.** `application.properties` expects port 5432; Docker publishes 5433 with the
-password defined in `docker/docker-compose.yml`. For Docker, export before starting the backend:
+**3. Point the backend at the right database.** Use the same `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME` and `DB_PASSWORD` for Docker, `psql` and the backend:
 
 ```bash
-export SPRING_DATASOURCE_URL='jdbc:postgresql://localhost:5433/ecogreen?options=-c%20timezone=Asia/Ho_Chi_Minh'
-export SPRING_DATASOURCE_PASSWORD='<POSTGRES_PASSWORD from docker/docker-compose.yml>'
+export DB_PASSWORD='<your password>'   # PowerShell: $env:DB_PASSWORD='<your password>'
+export DB_PORT=5432                    # only if it is not 5432
 ```
+If a Docker volume already exists, `POSTGRES_PASSWORD` is ignored: change the password with `ALTER USER postgres WITH PASSWORD '...';`.
 
 **4. Demo data and the first admin (optional).** The application works with empty tables (the storefront shows no products
 until an admin adds some).

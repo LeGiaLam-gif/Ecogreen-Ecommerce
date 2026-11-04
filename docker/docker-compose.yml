@@ -1,4 +1,7 @@
-# Run with: docker compose up -d
+# Run with: docker compose --env-file ../.env up -d   (from the docker/ folder)
+# DB_PASSWORD is required (no default password lives in the repository); DB_PORT defaults to 5432 and must match the
+# DB_PORT the backend uses. NOTE: POSTGRES_PASSWORD only applies when the pgdata volume is first created. For an existing
+# volume change the password with: ALTER USER postgres WITH PASSWORD '...';
 services:
 
   postgres:
@@ -6,10 +9,10 @@ services:
     container_name: ecogreen-postgres
     restart: always
     environment:
-      POSTGRES_PASSWORD: 123456
-      POSTGRES_DB: ecogreen
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      POSTGRES_DB: ${DB_NAME:-ecogreen}
     ports:
-      - "5433:5432"
+      - "${DB_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ../database/init-postgres.sql:/docker-entrypoint-initdb.d/init.sql

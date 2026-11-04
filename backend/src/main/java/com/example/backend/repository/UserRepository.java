@@ -20,12 +20,19 @@ public interface UserRepository extends JpaRepository<User, Long> {
 
     Optional<User> findByGoogleSub(String googleSub);
 
+    Optional<User> findByFacebookId(String facebookId);
+
     /** Cheap per-request check used by AuthInterceptor: no entity, no roles loaded. */
     boolean existsByIdAndActiveTrue(Long id);
 
     boolean existsByUsername(String username);
 
     boolean existsByEmail(String email);
+
+    /** B01: registration compares case-insensitively so "Alice" and "alice" (or two spellings of one e-mail) cannot coexist. */
+    boolean existsByUsernameIgnoreCase(String username);
+
+    boolean existsByEmailIgnoreCase(String email);
 
     /**
      * "New customers" for the sales dashboard summary (User.createdAt exists - see

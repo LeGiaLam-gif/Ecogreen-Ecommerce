@@ -234,12 +234,12 @@
 }
 
 .password-group .shopee-input {
-  padding-right: 120px;
+  padding-right: 44px;
 }
 
 .shopee-eye-toggle {
   position: absolute;
-  right: 90px;
+  right: 10px;
   top: 50%;
   transform: translateY(-50%);
   background: transparent;
@@ -256,17 +256,20 @@
   color: #222222;
 }
 
+/* "Quên mật khẩu?" sits on its own row under the password field, so it can never overlap the show/hide icon. */
+.shopee-forgot-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -6px;
+}
+
 .shopee-forgot-link {
-  position: absolute;
-  right: 10px;
-  top: 50%;
-  transform: translateY(-50%);
   background: transparent;
   border: none;
-  font-size: 0.78rem;
+  font-size: 0.8rem;
   color: #059669;
   cursor: pointer;
-  padding: 4px;
+  padding: 2px 0;
   text-decoration: none;
 }
 
@@ -371,7 +374,32 @@
   transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
 }
 
-.shopee-social-btn:hover {
+.shopee-social-btn {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.shopee-social-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.shopee-social-btn:disabled:hover {
+  background: #ffffff;
+  box-shadow: none;
+}
+
+.google-signin-slot {
+  min-width: 0;
+  display: flex;
+  justify-content: center;
+}
+
+.google-signin-slot .shopee-social-btn {
+  width: 100%;
+}
+
+.shopee-social-btn:not(:disabled):hover {
   background: #f9fafb;
   border-color: rgba(0, 0, 0, 0.3);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
@@ -477,6 +505,31 @@
 
 .shopee-modal-footer {
   padding: 12px 20px 20px;
+}
+
+/* Single-card pages (forgot / reset password) */
+.shopee-auth-container--single {
+  justify-content: center;
+}
+
+.shopee-alert-box.success {
+  background: #ecfdf5;
+  color: #047857;
+  border: 1px solid #a7f3d0;
+}
+
+.shopee-form-hint {
+  margin: 0 0 16px;
+  font-size: 0.88rem;
+  color: #6b7280;
+  line-height: 1.5;
+}
+
+.shopee-btn-link {
+  display: block;
+  text-align: center;
+  text-decoration: none;
+  box-sizing: border-box;
 }
 
 /* Responsive */

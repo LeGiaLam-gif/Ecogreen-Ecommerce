@@ -13,6 +13,18 @@ export const register = (username, email, password) =>
 export const loginWithGoogle = (idToken) =>
   http.post('/v1/auth/google', { idToken }).then((res) => res.data);
 
+// Sends ONLY the Facebook access token; the backend asks Facebook who it belongs to.
+export const loginWithFacebook = (accessToken) =>
+  http.post('/v1/auth/facebook', { accessToken }).then((res) => res.data);
+
+// Always succeeds (200) for a well-formed e-mail, whether or not an account exists; the backend sends the mail if it does.
+export const forgotPassword = (email) =>
+  http.post('/v1/auth/forgot-password', { email }).then((res) => res.data);
+
+// `token` is the value from the link in the e-mail.
+export const resetPassword = (token, password) =>
+  http.post('/v1/auth/reset-password', { token, password }).then((res) => res.data);
+
 // Revokes this refresh token on the server; the access token just expires.
 export const logout = (refreshToken) => http.post('/v1/auth/logout', { refreshToken });
 

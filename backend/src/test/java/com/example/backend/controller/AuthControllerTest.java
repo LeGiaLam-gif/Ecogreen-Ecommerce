@@ -1,10 +1,13 @@
 package com.example.backend.controller;
 
 import com.example.backend.dto.AuthResponse;
+import com.example.backend.dto.FacebookAuthRequest;
 import com.example.backend.dto.TokenPairResponse;
 import com.example.backend.dto.UserResponse;
 import com.example.backend.entity.Role;
 import com.example.backend.entity.User;
+import com.example.backend.exception.BadRequestException;
+import com.example.backend.exception.FacebookLoginUnavailableException;
 import com.example.backend.exception.GlobalExceptionHandler;
 import com.example.backend.exception.GoogleLoginUnavailableException;
 import com.example.backend.exception.UnauthorizedException;
@@ -13,8 +16,10 @@ import com.example.backend.security.AuthGuard;
 import com.example.backend.security.AuthInterceptor;
 import com.example.backend.security.JwtService;
 import com.example.backend.security.LoginThrottle;
+import com.example.backend.security.PasswordResetThrottle;
 import com.example.backend.security.TestJwt;
 import com.example.backend.service.AuthService;
+import com.example.backend.service.PasswordResetService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -46,6 +51,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class AuthControllerTest {
 
     private AuthService authService;
+    private PasswordResetService passwordResetService;
     private UserRepository userRepository;
     private JwtService jwt;
     private MockMvc mvc;
@@ -62,6 +68,7 @@ class AuthControllerTest {
     @BeforeEach
     void setUp() {
         authService = mock(AuthService.class);
+        passwordResetService = mock(PasswordResetService.class);
         userRepository = mock(UserRepository.class);
         jwt = new JwtService(TestJwt.SECRET, 900);
 
@@ -69,6 +76,7 @@ class AuthControllerTest {
         ReflectionTestUtils.setField(guard, "userRepository", userRepository);
         AuthController controller = new AuthController();
         ReflectionTestUtils.setField(controller, "authService", authService);
+        ReflectionTestUtils.setField(controller, "passwordResetService", passwordResetService);
         ReflectionTestUtils.setField(controller, "authGuard", guard);
 
         mvc = MockMvcBuilders.standaloneSetup(controller)
@@ -202,5 +210,85 @@ class AuthControllerTest {
         when(userRepository.existsByIdAndActiveTrue(3L)).thenReturn(false); // account deactivated meanwhile
         mvc.perform(get("/api/v1/auth/me").header("Authorization", "Bearer " + token))
                 .andExpect(status().isUnauthorized());
+    }
+
+    // ── B01: registration validation, forgot / reset password, Facebook ──────────────────────────────────────────
+
+    @Test
+    void register_invalidShape_isValidationErrorWithFieldMessages() throws Exception {
+        mvc.perform(post("/api/v1/auth/register").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"a b\",\"email\":\"not-an-email\",\"password\":\"password1\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"))
+                .andExpect(jsonPath("$.error.fields.username").exists())
+                .andExpect(jsonPath("$.error.fields.email").exists());
+        verify(authService, org.mockito.Mockito.never()).register(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void forgotPassword_alwaysAnswers200WithNoData() throws Exception {
+        mvc.perform(post("/api/v1/auth/forgot-password").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"someone@example.com\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data").isEmpty());
+        verify(passwordResetService).requestReset(eq("someone@example.com"), anyString());
+    }
+
+    @Test
+    void forgotPassword_badEmail_is400_andThrottled_is429WithRetryAfter() throws Exception {
+        mvc.perform(post("/api/v1/auth/forgot-password").contentType(MediaType.APPLICATION_JSON).content("{\"email\":\"nope\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
+
+        org.mockito.Mockito.doThrow(new PasswordResetThrottle.TooManyRequestsException(300))
+                .when(passwordResetService).requestReset(anyString(), anyString());
+        mvc.perform(post("/api/v1/auth/forgot-password").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"someone@example.com\"}"))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().string("Retry-After", "300"))
+                .andExpect(jsonPath("$.error.code").value("RATE_LIMITED"));
+    }
+
+    @Test
+    void resetPassword_ok_is200_andBadLinkIs400() throws Exception {
+        mvc.perform(post("/api/v1/auth/reset-password").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"token\":\"abc\",\"password\":\"newpassword1\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data").isEmpty());
+        verify(passwordResetService).resetPassword("abc", "newpassword1");
+
+        org.mockito.Mockito.doThrow(new BadRequestException("Liên kết đặt lại mật khẩu không hợp lệ hoặc đã hết hạn."))
+                .when(passwordResetService).resetPassword(anyString(), anyString());
+        mvc.perform(post("/api/v1/auth/reset-password").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"token\":\"old\",\"password\":\"newpassword1\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"))
+                .andExpect(jsonPath("$.error.message").value("Liên kết đặt lại mật khẩu không hợp lệ hoặc đã hết hạn."));
+    }
+
+    @Test
+    void resetPassword_missingFields_isValidationError() throws Exception {
+        mvc.perform(post("/api/v1/auth/reset-password").contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
+    }
+
+    @Test
+    void facebook_returnsSameEnvelopeAsLogin_andFailsClosedWith503WhenNotConfigured() throws Exception {
+        when(authService.loginWithFacebook(any(FacebookAuthRequest.class)))
+                .thenReturn(new AuthResponse("acc", "ref", 900, UserResponse.from(user())));
+        mvc.perform(post("/api/v1/auth/facebook").contentType(MediaType.APPLICATION_JSON).content("{\"accessToken\":\"fb-token\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.accessToken").value("acc"))
+                .andExpect(jsonPath("$.data.user.username").value("alice"));
+
+        when(authService.loginWithFacebook(any(FacebookAuthRequest.class)))
+                .thenThrow(new FacebookLoginUnavailableException("Đăng nhập bằng Facebook hiện chưa được cấu hình."));
+        mvc.perform(post("/api/v1/auth/facebook").contentType(MediaType.APPLICATION_JSON).content("{\"accessToken\":\"fb-token\"}"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.error.code").value("INTERNAL_ERROR"));
+
+        mvc.perform(post("/api/v1/auth/facebook").contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isBadRequest());
     }
 }

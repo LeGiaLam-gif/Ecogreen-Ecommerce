@@ -1,6 +1,7 @@
 package com.example.backend.service;
 
 import com.example.backend.dto.AuthResponse;
+import com.example.backend.dto.FacebookAuthRequest;
 import com.example.backend.dto.GoogleAuthRequest;
 import com.example.backend.dto.TokenPairResponse;
 import com.example.backend.dto.UserResponse;
@@ -8,6 +9,7 @@ import com.example.backend.entity.Role;
 import com.example.backend.entity.User;
 import com.example.backend.exception.BadRequestException;
 import com.example.backend.exception.ConflictException;
+import com.example.backend.exception.FacebookLoginUnavailableException;
 import com.example.backend.exception.GoogleLoginUnavailableException;
 import com.example.backend.exception.UnauthorizedException;
 import com.example.backend.repository.RoleRepository;
@@ -15,13 +17,17 @@ import com.example.backend.repository.UserRepository;
 import com.example.backend.security.JwtService;
 import com.example.backend.security.LoginThrottle;
 import com.example.backend.security.RefreshTokenService;
+import com.example.backend.security.FacebookIdentity;
+import com.example.backend.security.FacebookIdentityVerifier;
 import com.example.backend.security.GoogleIdentity;
 import com.example.backend.security.GoogleIdentityVerifier;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.HashSet;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -29,6 +35,7 @@ import java.util.UUID;
 public class AuthService {
 
     private static final String GOOGLE_AUTH_FAILED = "Xác thực Google không thành công.";
+    private static final String FACEBOOK_AUTH_FAILED = "Xác thực Facebook không thành công.";
     private static final String BAD_CREDENTIALS = "Tên đăng nhập hoặc mật khẩu không chính xác.";
 
     /** Valid BCrypt hash of a random value, built once; lets login spend the same time for unknown usernames. */
@@ -42,16 +49,21 @@ public class AuthService {
     @Autowired private LoginThrottle loginThrottle;
     @Autowired private CartService cartService;
     @Autowired private GoogleIdentityVerifier googleVerifier;
+    @Autowired private FacebookIdentityVerifier facebookVerifier;
 
     @Transactional
     public User register(String username, String email, String password) {
-        if (username == null || username.isBlank() || password == null || password.isBlank() || email == null || email.isBlank()) {
+        String name = username == null ? "" : username.trim();
+        String mail = email == null ? "" : email.trim().toLowerCase(Locale.ROOT);
+        if (name.isEmpty() || mail.isEmpty() || password == null || password.isBlank()) {
             throw new BadRequestException("Vui lòng nhập đầy đủ tên đăng nhập, email và mật khẩu.");
         }
-        if (userRepository.existsByUsername(username)) {
+        PasswordPolicy.validate(password);
+        // Case-insensitive on both: "Alice"/"alice" and "A@x.com"/"a@x.com" are the same person to every later lookup.
+        if (userRepository.existsByUsernameIgnoreCase(name)) {
             throw new ConflictException("Tên đăng nhập này đã được sử dụng.");
         }
-        if (userRepository.existsByEmail(email)) {
+        if (userRepository.existsByEmailIgnoreCase(mail)) {
             throw new ConflictException("Địa chỉ email này đã được đăng ký.");
         }
 
@@ -59,15 +71,27 @@ public class AuthService {
                 .orElseThrow(() -> new IllegalStateException("Quyền USER không tồn tại trong hệ thống."));
 
         User user = new User();
-        user.setUsername(username);
-        user.setEmail(email);
+        user.setUsername(name);
+        user.setEmail(mail);
         user.setPassword(passwordHasher.hash(password));
         user.setRoles(new HashSet<>(java.util.List.of(userRole)));
 
-        User saved = userRepository.save(user);
+        User saved = saveNewUser(user, "Tên đăng nhập hoặc email này đã được sử dụng.");
         // Every authenticated user gets exactly one server-side cart (1-1).
         cartService.createCartForUser(saved);
         return saved;
+    }
+
+    /**
+     * Flushes inside the method so a unique-constraint race (two requests registering the same name/email at once) surfaces
+     * here as a 409 instead of as a 500 at commit time.
+     */
+    private User saveNewUser(User user, String conflictMessage) {
+        try {
+            return userRepository.saveAndFlush(user);
+        } catch (DataIntegrityViolationException e) {
+            throw new ConflictException(conflictMessage);
+        }
     }
 
     /**
@@ -76,12 +100,16 @@ public class AuthService {
      * message is only revealed after the correct password. Failed attempts are throttled per username + client IP.
      */
     public AuthResponse login(String username, String password, String clientIp) {
-        if (username == null || username.isBlank() || password == null || password.isEmpty()) {
+        if (username == null || username.isBlank() || password == null || password.isEmpty()) { // identifier = username or e-mail
             throw new UnauthorizedException(BAD_CREDENTIALS);
         }
+        username = username.trim();
         loginThrottle.checkAllowed(username, clientIp);
 
-        User user = userRepository.findByUsername(username).orElse(null);
+        // An identifier with '@' is an e-mail (usernames cannot contain '@'); anything else is a username.
+        User user = (username.contains("@")
+                ? userRepository.findByEmailIgnoreCase(username)
+                : userRepository.findByUsername(username)).orElse(null);
         boolean passwordOk = passwordHasher.matches(password, user != null ? user.getPassword() : dummyHash());
         if (user == null || !passwordOk) {
             loginThrottle.recordFailure(username, clientIp);
@@ -179,9 +207,69 @@ public class AuthService {
                 newUser.setGoogleSub(sub);
                 newUser.setRoles(new HashSet<>(java.util.List.of(userRole)));
 
-                user = userRepository.save(newUser);
+                user = saveNewUser(newUser, GOOGLE_AUTH_FAILED);
                 cartService.createCartForUser(user);
             }
+        }
+
+        return issueSession(user);
+    }
+
+    /**
+     * Facebook Login (access-token flow). The ONLY client input is the access token; id, name and e-mail come from the
+     * Graph API call the server makes itself (see FacebookApiIdentityVerifier). Policy, deliberately stricter than Google:
+     * the account is found by facebook_id, otherwise a NEW account is created, and an existing account is NEVER linked just
+     * because the e-mail matches (Facebook does not tell us the address is verified, so that link would be an account-takeover
+     * path). A person without a Facebook e-mail cannot sign up this way.
+     */
+    @Transactional
+    public AuthResponse loginWithFacebook(FacebookAuthRequest request) {
+        String accessToken = request == null ? null : request.accessToken();
+        if (accessToken == null || accessToken.isBlank()) {
+            throw new UnauthorizedException(FACEBOOK_AUTH_FAILED);
+        }
+        if (!facebookVerifier.isConfigured()) {
+            throw new FacebookLoginUnavailableException("Đăng nhập bằng Facebook hiện chưa được cấu hình.");
+        }
+
+        FacebookIdentity identity = facebookVerifier.verify(accessToken); // throws if invalid / other app / unreachable
+        String id = identity == null || identity.id() == null ? "" : identity.id().trim();
+        if (id.isEmpty()) {
+            throw new UnauthorizedException(FACEBOOK_AUTH_FAILED);
+        }
+
+        User user;
+        Optional<User> byId = userRepository.findByFacebookId(id);
+        if (byId.isPresent()) {
+            user = byId.get();
+            requireActive(user);
+            cartService.getOrCreateCart(user);
+        } else {
+            String email = identity.email() == null ? "" : identity.email().trim().toLowerCase(Locale.ROOT);
+            if (email.isEmpty() || !email.contains("@")) {
+                throw new BadRequestException("Tài khoản Facebook của bạn không cung cấp email. "
+                        + "Vui lòng cho phép chia sẻ email khi đăng nhập, hoặc đăng ký bằng email.");
+            }
+            if (userRepository.existsByEmailIgnoreCase(email)) {
+                throw new ConflictException("Email này đã được dùng cho một tài khoản EcoGreen. "
+                        + "Hãy đăng nhập bằng mật khẩu hoặc Google.");
+            }
+            String baseName = (identity.name() != null && !identity.name().isBlank())
+                    ? identity.name()
+                    : email.substring(0, email.indexOf('@'));
+            Role userRole = roleRepository.findByName(Role.CUSTOMER)
+                    .orElseThrow(() -> new IllegalStateException("USER role missing - run database init script."));
+
+            User newUser = new User();
+            newUser.setUsername(generateUniqueUsername(baseName));
+            newUser.setEmail(email);
+            // Random, never disclosed: the account is entered through Facebook (or a later password reset).
+            newUser.setPassword(passwordHasher.hash(UUID.randomUUID() + UUID.randomUUID().toString()));
+            newUser.setFacebookId(id);
+            newUser.setRoles(new HashSet<>(java.util.List.of(userRole)));
+
+            user = saveNewUser(newUser, "Email này đã được dùng cho một tài khoản EcoGreen. Hãy đăng nhập bằng mật khẩu hoặc Google.");
+            cartService.createCartForUser(user);
         }
 
         return issueSession(user);

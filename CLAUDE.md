@@ -45,7 +45,7 @@ rewrite use typed, validated request DTOs.
 (`StatsController`): bare JSON, `{message}` errors, ADMIN-only via `requireAdmin()`. Rules for this transition are in section 5.
 
 **Database** — `database/init-postgres.sql` is the baseline, `spring.jpa.hibernate.ddl-auto=update` runs in development, and
-versioned SQL lives in `backend/src/main/resources/db/migration` (used: `V2`–`V6`, `V10`–`V12`, `V20`–`V22`, `V30`–`V31`,
+versioned SQL lives in `backend/src/main/resources/db/migration` (used: `V2`–`V8`, `V10`–`V12`, `V20`–`V22`, `V30`–`V31`,
 `V40`–`V41`, `V50`–`V51`, `V60`, `V70`, `V80`, `V90`). **Flyway is not active**; migrations are
 applied by hand (section 6).
 

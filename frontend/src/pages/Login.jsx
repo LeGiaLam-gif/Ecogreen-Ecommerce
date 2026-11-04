@@ -1,7 +1,8 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { getGoogleClientId, renderGoogleSignInButton } from '../services/googleAuth';
+import SocialAuthButtons from '../components/SocialAuthButtons';
+import { authErrorMessage } from '../utils/authErrors';
 import './Login.css';
 
 const Login = () => {
@@ -11,56 +12,24 @@ const Login = () => {
   const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [googleLoading, setGoogleLoading] = useState(false);
-  const [googleUnavailable, setGoogleUnavailable] = useState(!getGoogleClientId());
-  const googleBtnRef = useRef(null);
-  const [forgotModal, setForgotModal] = useState(false);
 
-  const { login, loginWithGoogle } = useAuth();
+  const { login } = useAuth();
   const navigate = useNavigate();
+
+  const goHome = (user) => navigate(user.roles?.includes('ADMIN') ? '/admin' : '/');
 
   const handleStandardLogin = async (e) => {
     e.preventDefault();
     setError('');
     setSubmitting(true);
     try {
-      const user = await login(username.trim(), password);
-      navigate(user.roles?.includes('ADMIN') ? '/admin' : '/');
+      goHome(await login(username.trim(), password, rememberMe));
     } catch (err) {
-      setError(err.friendlyMessage || err.response?.data?.message || 'Tên đăng nhập hoặc mật khẩu không chính xác.');
+      setError(authErrorMessage(err, 'Tên đăng nhập hoặc mật khẩu không chính xác.'));
     } finally {
       setSubmitting(false);
     }
   };
-
-  // Google returns a signed ID token; the backend verifies it. Only the token is sent.
-  const handleGoogleIdToken = async (idToken) => {
-    setGoogleLoading(true);
-    setError('');
-    try {
-      const user = await loginWithGoogle(idToken);
-      navigate(user.roles?.includes('ADMIN') ? '/admin' : '/');
-    } catch (err) {
-      setError(err.friendlyMessage || err.response?.data?.message || 'Đăng nhập bằng Google không thành công. Vui lòng thử lại.');
-    } finally {
-      setGoogleLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!googleBtnRef.current || !getGoogleClientId()) return;
-    renderGoogleSignInButton(googleBtnRef.current, {
-      onIdToken: handleGoogleIdToken,
-      onError: () => setError('Đăng nhập bằng Google không thành công. Vui lòng thử lại.'),
-      text: 'signin_with'
-    }).catch(() => setGoogleUnavailable(true));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const handleFacebookClick = () => {
-    alert('Tính năng đăng nhập Facebook đang được bảo trì theo quy định bảo mật Meta. Vui lòng chọn "Đăng nhập bằng Google" để vào hệ thống ngay!');
-  };
-
 
   return (
     <div className="shopee-auth-page">
@@ -98,19 +67,15 @@ const Login = () => {
           </div>
         </div>
 
-        {/* Right Side: Shopee-Style Login Card */}
+        {/* Right Side: Login Card */}
         <div className="shopee-auth-card-side">
           <div className="shopee-login-card">
             <div className="shopee-card-header">
               <h2 className="shopee-form-title">Đăng nhập</h2>
-              <div className="shopee-qr-tip" title="Đăng nhập nhanh">
-                <span className="qr-tip-text">Đăng nhập với mã QR</span>
-                <span className="qr-icon-svg">🔲</span>
-              </div>
             </div>
 
             {error && (
-              <div className="shopee-alert-box error">
+              <div className="shopee-alert-box error" role="alert">
                 <span className="alert-icon">⚠️</span>
                 <span>{error}</span>
               </div>
@@ -120,10 +85,11 @@ const Login = () => {
               <div className="shopee-input-group">
                 <input
                   type="text"
-                  placeholder="Email/Số điện thoại/Tên đăng nhập"
+                  placeholder="Email hoặc tên đăng nhập"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   className="shopee-input"
+                  autoComplete="username"
                   required
                 />
               </div>
@@ -135,6 +101,7 @@ const Login = () => {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="shopee-input"
+                  autoComplete="current-password"
                   required
                 />
                 <button
@@ -143,6 +110,7 @@ const Login = () => {
                   onClick={() => setShowPassword(!showPassword)}
                   tabIndex="-1"
                   title={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                  aria-label={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
                 >
                   {showPassword ? (
                     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2">
@@ -156,76 +124,44 @@ const Login = () => {
                     </svg>
                   )}
                 </button>
-                <button
-                  type="button"
-                  className="shopee-forgot-link"
-                  onClick={() => setForgotModal(true)}
-                  tabIndex="-1"
-                >
-                  Quên mật khẩu?
-                </button>
               </div>
 
-              <button
-                type="submit"
-                className="shopee-btn-submit"
-                disabled={submitting}
-              >
+              <div className="shopee-forgot-row">
+                <Link to="/forgot-password" className="shopee-forgot-link">
+                  Quên mật khẩu?
+                </Link>
+              </div>
+
+              <button type="submit" className="shopee-btn-submit" disabled={submitting}>
                 {submitting ? 'ĐANG ĐĂNG NHẬP...' : 'ĐĂNG NHẬP'}
               </button>
 
               <div className="shopee-options-row">
                 <label className="shopee-checkbox-label">
-                  <input
-                    type="checkbox"
-                    checked={rememberMe}
-                    onChange={(e) => setRememberMe(e.target.checked)}
-                  />
+                  <input type="checkbox" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)} />
                   <span>Duy trì đăng nhập</span>
                 </label>
-                <span className="shopee-help-tip" title="Ghi nhớ trạng thái phiên để không phải nhập lại mật khẩu">
+                <span
+                  className="shopee-help-tip"
+                  title="Bỏ chọn nếu bạn dùng máy chung: phiên đăng nhập sẽ kết thúc khi đóng trình duyệt."
+                >
                   (?)
                 </span>
               </div>
             </form>
 
-            {/* Shopee Divider: HOẶC */}
             <div className="shopee-divider">
               <span className="divider-line"></span>
               <span className="divider-text">HOẶC</span>
               <span className="divider-line"></span>
             </div>
 
-            {/* Social Login Buttons: Facebook & Google */}
-            <div className="shopee-social-row">
-              <button
-                type="button"
-                className="shopee-social-btn btn-facebook"
-                onClick={handleFacebookClick}
-              >
-                <svg className="social-icon" viewBox="0 0 24 24" width="20" height="20" fill="#1877F2">
-                  <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
-                </svg>
-                <span>Facebook</span>
-              </button>
+            <SocialAuthButtons remember={rememberMe} onSuccess={goHome} onError={setError} />
 
-              <div className="google-signin-slot" style={{ flex: 1, minWidth: 0, display: 'flex', justifyContent: 'center' }}>
-                {googleUnavailable ? (
-                  <button type="button" className="shopee-social-btn btn-google" disabled title="Đăng nhập Google chưa được cấu hình">
-                    <span>Google (chưa khả dụng)</span>
-                  </button>
-                ) : (
-                  <div ref={googleBtnRef} aria-busy={googleLoading} />
-                )}
-              </div>
-            </div>
-
-            {/* Terms disclaimer */}
             <p className="shopee-legal-note">
-              Bằng việc đăng nhập, bạn đồng ý với <Link to="/policy/returns">Điều khoản dịch vụ</Link> & <Link to="/contact">Chính sách bảo mật</Link> của EcoGreen.
+              Bằng việc đăng nhập, bạn đồng ý với <Link to="/terms">Điều khoản dịch vụ</Link> & <Link to="/privacy">Chính sách bảo mật</Link> của EcoGreen.
             </p>
 
-            {/* Switch to Register */}
             <div className="shopee-switch-auth">
               <span>Bạn mới biết đến EcoGreen?</span>
               <Link to="/register" className="shopee-register-link">
@@ -235,33 +171,6 @@ const Login = () => {
           </div>
         </div>
       </div>
-
-
-      {/* Forgot Password Modal */}
-      {forgotModal && (
-        <div className="shopee-modal-overlay" onClick={() => setForgotModal(false)}>
-          <div className="shopee-modal-box" onClick={(e) => e.stopPropagation()}>
-            <div className="shopee-modal-header">
-              <h3>Khôi phục mật khẩu</h3>
-              <button className="btn-close-x" onClick={() => setForgotModal(false)}>✕</button>
-            </div>
-            <div className="shopee-modal-body">
-              <p>
-                Để đảm bảo an toàn tài khoản sinh thái EcoGreen, bạn có thể:
-              </p>
-              <ul style={{ paddingLeft: '20px', margin: '10px 0', fontSize: '0.9rem', color: '#475569' }}>
-                <li>Đăng nhập nhanh và bảo mật tuyệt đối qua <strong>Google OAuth 2.0</strong>.</li>
-                <li>Liên hệ Tổng đài CSKH EcoGreen <strong>1900 8888</strong> để được hỗ trợ cấp lại mật khẩu ngay lập tức.</li>
-              </ul>
-            </div>
-            <div className="shopee-modal-footer">
-              <button className="shopee-btn-submit" onClick={() => setForgotModal(false)}>
-                Đã hiểu
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

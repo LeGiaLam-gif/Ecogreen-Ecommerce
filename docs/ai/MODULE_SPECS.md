@@ -42,7 +42,7 @@ B01 → B02 and B05 → B03 → B08 → B04 → B06 → B07 → B09 and B10 → 
 
 ## 3. Migration version ranges (namespaces, not execution order)
 
-Files present in `backend/src/main/resources/db/migration` (21): `V2`, `V3`, `V4`, `V5`, `V6`, `V10`, `V11`, `V12`, `V20`, `V21`,
+Files present in `backend/src/main/resources/db/migration` (23): `V2`, `V3`, `V4`, `V5`, `V6`, `V7`, `V8`, `V10`, `V11`, `V12`, `V20`, `V21`,
 `V22`, `V30`, `V31`, `V40`, `V41`, `V50`, `V51`, `V60`, `V70`, `V80`, `V90`.
 
 `V1` = baseline = `database/init-postgres.sql` (**no module creates V1**; B13 or the owner's minimal Flyway activation creates
@@ -50,7 +50,7 @@ Files present in `backend/src/main/resources/db/migration` (21): `V2`, `V3`, `V4
 
 | Block | Range | Used |
 |---|---|---|
-| B01 Auth/RBAC | V2 – V9 | V2–V6 |
+| B01 Auth/RBAC | V2 – V9 | V2–V8 |
 | B02 Catalog | V10 – V19 | V10–V12 |
 | B05 Order | V20 – V29 | V20–V22 |
 | B03 Inventory | V30 – V39 | V30–V31 |
