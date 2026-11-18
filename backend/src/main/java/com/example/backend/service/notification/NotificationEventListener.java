@@ -9,6 +9,7 @@ import com.example.backend.event.OrderPlacedEvent;
 import com.example.backend.event.OrderStatusChangedEvent;
 import com.example.backend.event.ReturnCreatedEvent;
 import com.example.backend.event.ReturnStatusChangedEvent;
+import com.example.backend.event.UserRegisteredEvent;
 import com.example.backend.repository.NotificationSourceRepository;
 import com.example.backend.repository.NotificationSourceRepository.OrderRow;
 import com.example.backend.repository.NotificationSourceRepository.ReturnRow;
@@ -37,6 +38,7 @@ import java.util.Map;
  * </ul>
  *
  * <pre>
+ * UserRegisteredEvent                       -> ACCOUNT_CREATED
  * OrderPlacedEvent                          -> ORDER_CREATED
  * OrderStatusChangedEvent newStatus=PAID    -> PAYMENT_SUCCESS
  * OrderStatusChangedEvent newStatus=SHIPPED -> ORDER_SHIPPED
@@ -63,6 +65,13 @@ public class NotificationEventListener {
         read.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         read.setReadOnly(true);
         this.readOnlyNew = read;
+    }
+
+    @Async(NotificationAsyncConfig.EXECUTOR)
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onUserRegistered(UserRegisteredEvent event) {
+        safely("ACCOUNT_CREATED", () -> notifications.deliver(event.userId(), NotificationType.ACCOUNT_CREATED,
+                Map.of(), "user:" + event.userId() + ":CREATED"));
     }
 
     @Async(NotificationAsyncConfig.EXECUTOR)

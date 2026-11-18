@@ -5,6 +5,7 @@ package com.example.backend.entity;
  * (UPPER_SNAKE_CASE), so a new type needs a template and an event, not DDL. Source event and template: see the B10 contract.
  */
 public enum NotificationType {
+    ACCOUNT_CREATED,
     ORDER_CREATED,
     PAYMENT_SUCCESS,
     ORDER_SHIPPED,

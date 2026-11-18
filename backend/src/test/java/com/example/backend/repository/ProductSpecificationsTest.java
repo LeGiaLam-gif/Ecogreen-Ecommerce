@@ -7,7 +7,9 @@ import jakarta.persistence.criteria.CriteriaBuilder;
 import jakarta.persistence.criteria.CriteriaQuery;
 import jakarta.persistence.criteria.Expression;
 import jakarta.persistence.criteria.Path;
+import jakarta.persistence.criteria.Predicate;
 import jakarta.persistence.criteria.Root;
+import jakarta.persistence.criteria.Subquery;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.jpa.domain.Specification;
@@ -38,12 +40,20 @@ class ProductSpecificationsTest {
     private final CriteriaBuilder cb = mock(CriteriaBuilder.class);
     private final Path path = mock(Path.class);
     private final Expression lowered = mock(Expression.class);
+    private final Subquery subquery = mock(Subquery.class);
+    private final Root subRoot = mock(Root.class);
 
     @BeforeEach
     void stubCriteria() {
         when(root.get(anyString())).thenReturn(path);
         when(path.get(anyString())).thenReturn(path);
         when(cb.lower(any(Expression.class))).thenReturn(lowered);
+        when(query.subquery(any(Class.class))).thenReturn(subquery);
+        when(subquery.from(any(Class.class))).thenReturn(subRoot);
+        when(subRoot.get(anyString())).thenReturn(path);
+        when(subquery.select(any())).thenReturn(subquery);
+        when(subquery.where(any(Predicate[].class))).thenReturn(subquery);
+        when(cb.diff(any(Expression.class), any(Expression.class))).thenReturn(path);
     }
 
     private void apply(ProductSearchCriteria criteria, Product.Status status) {

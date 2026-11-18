@@ -1,10 +1,10 @@
 import axios from 'axios';
-import { clearSession, getAccessToken, getRefreshToken, saveTokens } from './authStorage';
+import { clearSession, hasSessionHint, isRememberedSession } from './authStorage';
 
 // Backend base URL (proxied via Vite server to Spring Boot on port 8081)
 export const API_BASE_URL = '/api';
 
-const http = axios.create({ baseURL: API_BASE_URL });
+const http = axios.create({ baseURL: API_BASE_URL, withCredentials: true });
 
 /**
  * Dual-mode (B01-F1):
@@ -32,14 +32,33 @@ export const isV1Request = (config) => V1_PATH.test(requestPath(config));
 
 const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
-// Attach the access token (JWT, if any) to every request automatically.
-http.interceptors.request.use((config) => {
-  const token = getAccessToken();
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
+const csrfClient = axios.create({ baseURL: API_BASE_URL, withCredentials: true });
+let csrfToken = null;
+let csrfPromise = null;
+const isStateChanging = (method) => !['get', 'head', 'options', 'trace'].includes((method || 'get').toLowerCase());
+
+const withCsrf = async (config) => {
+  if (!isStateChanging(config.method)) return config;
+  if (!csrfToken) {
+    if (!csrfPromise) {
+      csrfPromise = csrfClient.get('/v1/auth/csrf')
+        .then((response) => {
+          csrfToken = response.data?.data;
+          if (!csrfToken) throw new Error('INVALID_CSRF_RESPONSE');
+        })
+        .finally(() => {
+          csrfPromise = null;
+        });
+    }
+    await csrfPromise;
   }
+  config.headers = config.headers || {};
+  config.headers['X-CSRF-Token'] = csrfToken;
   return config;
-});
+};
+
+// The double-submit token is not an authentication credential; access/refresh tokens stay HttpOnly.
+http.interceptors.request.use(withCsrf);
 
 // Success: unwrap `{data, meta}` for /api/v1 only.
 //   single resource            -> response.data = <data>
@@ -82,30 +101,26 @@ const normaliseError = (error) => {
   return Promise.reject(normalised);
 };
 
-// ── Access-token refresh (B01-P2) ────────────────────────────────────────────
+// ── HttpOnly-cookie refresh ──────────────────────────────────────────────────
 
 // These endpoints never trigger a refresh (a 401 there is the real answer).
 const NO_REFRESH_PATH = /^\/api\/v1\/auth\/(login|register|google|facebook|forgot-password|reset-password|refresh|logout)\/?$/;
 
 // A bare axios instance (no interceptors) so a failing refresh can never recurse into itself.
-const refreshClient = axios.create({ baseURL: API_BASE_URL });
+const refreshClient = axios.create({ baseURL: API_BASE_URL, withCredentials: true });
 
-const callRefreshEndpoint = async (refreshToken) => {
-  const res = await refreshClient.post('/v1/auth/refresh', { refreshToken });
-  const pair = res.data?.data;
-  if (!pair?.accessToken || !pair?.refreshToken) throw new Error('INVALID_REFRESH_RESPONSE');
-  saveTokens(pair);
-  return pair.accessToken;
+const callRefreshEndpoint = async () => {
+  const config = await withCsrf({
+    method: 'post',
+    headers: { 'X-Remember-Me': String(isRememberedSession()) }
+  });
+  await refreshClient.post('/v1/auth/refresh', null, config);
 };
 
-// Runs inside a cross-tab lock when available. If another tab already rotated the token while we waited for the
-// lock, reuse its result instead of presenting an already-rotated refresh token (which would revoke the family).
-const performRefresh = async (startedWith) => {
+// Browser cookies are shared across tabs, so serialize refresh rotations when the Lock API is available.
+const performRefresh = async () => {
   const run = async () => {
-    const current = getRefreshToken();
-    if (!current) throw new Error('NO_REFRESH_TOKEN');
-    if (current !== startedWith && getAccessToken()) return getAccessToken();
-    return callRefreshEndpoint(current);
+    await callRefreshEndpoint();
   };
   if (typeof navigator !== 'undefined' && navigator.locks?.request) {
     return navigator.locks.request('ecogreen-token-refresh', run);
@@ -115,9 +130,9 @@ const performRefresh = async (startedWith) => {
 
 // Single-flight: every concurrent 401 awaits the SAME refresh promise.
 let refreshPromise = null;
-const refreshOnce = (startedWith) => {
+const refreshOnce = () => {
   if (!refreshPromise) {
-    refreshPromise = performRefresh(startedWith).finally(() => {
+    refreshPromise = performRefresh().finally(() => {
       refreshPromise = null;
     });
   }
@@ -134,7 +149,7 @@ const redirectToLogin = () => {
 const shouldRefresh = (error) => {
   const config = error?.config;
   if (!config || config._retry || error?.response?.status !== 401) return false;
-  if (!getRefreshToken()) return false;
+  if (!hasSessionHint()) return false;
   if (NO_REFRESH_PATH.test(requestPath(config))) return false;
   const apiCode = error.response?.data?.error?.code; // /api/v1 errors carry a code; legacy 401s do not
   return !apiCode || apiCode === 'UNAUTHENTICATED';
@@ -143,22 +158,14 @@ const shouldRefresh = (error) => {
 const handleResponseError = async (error) => {
   if (shouldRefresh(error)) {
     error.config._retry = true; // at most one refresh + one retry per request
-    // The request was sent with an access token that has since been replaced (a concurrent refresh finished first):
-    // just retry with the current one instead of rotating the refresh token again.
-    const sent = error.config.headers?.Authorization;
-    if (sent && getAccessToken() && sent !== `Bearer ${getAccessToken()}`) {
-      return http(error.config);
-    }
     try {
-      await refreshOnce(getRefreshToken());
+      await refreshOnce();
     } catch {
-      // ANY failed refresh (401/403, 5xx, network error, malformed response, no refresh token) ends the session:
-      // clear storage and go to /login (B01-P2 spec). After clearing there is no refresh token left, so
-      // shouldRefresh() is false for every later 401 and no refresh loop is possible.
+      // Any failed refresh ends the session; clear the non-secret hint and prevent another refresh loop.
       redirectToLogin();
       return normaliseError(error);
     }
-    return http(error.config); // request interceptor re-attaches the new access token
+    return http(error.config); // the browser attaches the rotated HttpOnly cookie
   }
   return normaliseError(error);
 };

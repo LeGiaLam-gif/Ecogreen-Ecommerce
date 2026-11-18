@@ -15,9 +15,18 @@ public final class AnalyticsEventTypes {
     public static final String ORDER_CANCELLED = "order_cancelled";
     public static final String RETURN_CREATED = "return_created";
     public static final String RETURN_STATUS_CHANGED = "return_status_changed";
+    public static final String PRODUCT_VIEW = "product_view";
+    public static final String PRODUCT_SEARCH = "product_search";
+    public static final String ADD_TO_CART = "add_to_cart";
+    public static final String REMOVE_FROM_CART = "remove_from_cart";
+    public static final String CHECKOUT_STARTED = "checkout_started";
 
     public static final List<String> ALL = List.of(
-            ORDER_CREATED, PAYMENT_SUCCESS, ORDER_CANCELLED, RETURN_CREATED, RETURN_STATUS_CHANGED);
+            ORDER_CREATED, PAYMENT_SUCCESS, ORDER_CANCELLED, RETURN_CREATED, RETURN_STATUS_CHANGED,
+            PRODUCT_VIEW, PRODUCT_SEARCH, ADD_TO_CART, REMOVE_FROM_CART, CHECKOUT_STARTED);
+
+    public static final List<String> CLIENT_TRACKABLE = List.of(
+            PRODUCT_VIEW, PRODUCT_SEARCH, ADD_TO_CART, REMOVE_FROM_CART, CHECKOUT_STARTED);
 
     private AnalyticsEventTypes() {
     }

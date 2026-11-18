@@ -19,6 +19,7 @@ import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.HashSet;
 import java.util.Optional;
@@ -40,6 +41,7 @@ class AuthServiceRegisterAndEmailLoginTest {
     @Mock private PasswordHasher passwordHasher;
     @Mock private RefreshTokenService refreshTokenService;
     @Mock private CartService cartService;
+    @Mock private ApplicationEventPublisher eventPublisher;
     @Spy private JwtService jwtService = new JwtService(TestJwt.SECRET, 900);
     @Spy private LoginThrottle loginThrottle = new LoginThrottle(3, 900, java.time.Clock.systemUTC());
 

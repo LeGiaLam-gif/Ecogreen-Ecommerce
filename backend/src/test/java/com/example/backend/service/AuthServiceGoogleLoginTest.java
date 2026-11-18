@@ -4,6 +4,7 @@ import com.example.backend.dto.AuthResponse;
 import com.example.backend.dto.GoogleAuthRequest;
 import com.example.backend.entity.Role;
 import com.example.backend.entity.User;
+import com.example.backend.event.UserRegisteredEvent;
 import com.example.backend.exception.GoogleLoginUnavailableException;
 import com.example.backend.exception.UnauthorizedException;
 import com.example.backend.repository.RoleRepository;
@@ -18,6 +19,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.Arrays;
 import java.util.HashSet;
@@ -50,6 +52,7 @@ class AuthServiceGoogleLoginTest {
     @Mock private RefreshTokenService refreshTokenService;
     @Mock private CartService cartService;
     @Mock private GoogleIdentityVerifier googleVerifier;
+    @Mock private ApplicationEventPublisher eventPublisher;
 
     @InjectMocks private AuthService authService;
 
@@ -161,7 +164,7 @@ class AuthServiceGoogleLoginTest {
         when(userRepository.existsByUsername(anyString())).thenReturn(false);
         when(roleRepository.findByName(Role.CUSTOMER)).thenReturn(Optional.of(new Role(1L, Role.CUSTOMER)));
         when(passwordHasher.hash(anyString())).thenReturn("random-bcrypt-hash");
-        when(userRepository.save(any(User.class))).thenAnswer(inv -> {
+        when(userRepository.saveAndFlush(any(User.class))).thenAnswer(inv -> {
             User u = inv.getArgument(0);
             u.setId(42L);
             return u;
@@ -172,7 +175,7 @@ class AuthServiceGoogleLoginTest {
         AuthResponse response = authService.loginWithGoogle(tokenRequest());
 
         ArgumentCaptor<User> saved = ArgumentCaptor.forClass(User.class);
-        verify(userRepository).save(saved.capture());
+        verify(userRepository).saveAndFlush(saved.capture());
         User created = saved.getValue();
         assertEquals("new.user@example.com", created.getEmail());
         assertEquals("sub-new", created.getGoogleSub());
@@ -182,6 +185,9 @@ class AuthServiceGoogleLoginTest {
         assertNotNull(created.getUsername());
         verify(passwordHasher).hash(anyString()); // random, unusable password
         verify(cartService).createCartForUser(created);
+        ArgumentCaptor<UserRegisteredEvent> event = ArgumentCaptor.forClass(UserRegisteredEvent.class);
+        verify(eventPublisher).publishEvent(event.capture());
+        assertEquals(42L, event.getValue().userId());
         assertEquals("access-token", response.accessToken());
         assertEquals("refresh-token", response.refreshToken());
     }

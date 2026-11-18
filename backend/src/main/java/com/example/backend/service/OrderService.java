@@ -221,6 +221,19 @@ public class OrderService {
         return transitionStatus(orderId, OrderStatus.CANCELLED, userId, note);
     }
 
+    /** Cancels an expired pending order while holding its row lock; returns false when it was already handled. */
+    @Transactional
+    public boolean cancelIfExpired(Long orderId, LocalDateTime cutoff) {
+        Order order = lockOrder(orderId);
+        if (order.getStatus() != OrderStatus.PENDING_PAYMENT
+                || order.getCreatedAt() == null
+                || order.getCreatedAt().isAfter(cutoff)) {
+            return false;
+        }
+        transitionStatus(orderId, OrderStatus.CANCELLED, null, "Payment expired after 3 days");
+        return true;
+    }
+
     /**
      * Locks the order row and re-reads it. The refresh matters: with open-in-view an Order loaded earlier in the same
      * HTTP request would otherwise be returned from the persistence context with a stale status even though the row is now

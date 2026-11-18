@@ -1,5 +1,6 @@
 package com.example.backend.security;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -31,6 +32,7 @@ public class LoginThrottle {
     private final long windowMs;
     private final Clock clock;
 
+    @Autowired
     public LoginThrottle(@Value("${ecogreen.auth.max-failed-logins:5}") int maxFailures,
                          @Value("${ecogreen.auth.lockout-window-seconds:900}") long windowSeconds) {
         this(maxFailures, windowSeconds, Clock.systemUTC());

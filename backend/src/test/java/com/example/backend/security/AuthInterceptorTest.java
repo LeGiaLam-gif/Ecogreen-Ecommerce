@@ -2,7 +2,9 @@ package com.example.backend.security;
 
 import com.example.backend.entity.Role;
 import com.example.backend.entity.User;
+import com.example.backend.exception.ForbiddenException;
 import com.example.backend.repository.UserRepository;
+import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
@@ -27,7 +29,8 @@ class AuthInterceptorTest {
 
     private final JwtService jwt = new JwtService(TestJwt.SECRET, 900);
     private final UserRepository users = mock(UserRepository.class);
-    private final AuthInterceptor interceptor = new AuthInterceptor(jwt, users);
+    private final AuthCookies cookies = new AuthCookies(false, 900, 14);
+    private final AuthInterceptor interceptor = new AuthInterceptor(jwt, users, cookies);
 
     private static User user(long id) {
         User u = new User();
@@ -73,5 +76,23 @@ class AuthInterceptorTest {
         assertNull(run("Basic abc"));
         assertNull(run(null));
         verify(users, never()).existsByIdAndActiveTrue(org.mockito.ArgumentMatchers.anyLong());
+    }
+
+    @Test
+    void cookieTokenAuthenticatesAndStateChangingCookieRequestsRequireCsrf() {
+        when(users.existsByIdAndActiveTrue(9L)).thenReturn(true);
+        MockHttpServletRequest authenticated = new MockHttpServletRequest("GET", "/api/orders");
+        authenticated.setCookies(new Cookie(AuthCookies.ACCESS, jwt.issueAccessToken(user(9))));
+        assertTrue(interceptor.preHandle(authenticated, new MockHttpServletResponse(), new Object()));
+        assertNotNull(authenticated.getAttribute(AuthInterceptor.REQUEST_ATTR));
+
+        MockHttpServletRequest unsafe = new MockHttpServletRequest("POST", "/api/orders");
+        unsafe.setCookies(new Cookie(AuthCookies.REFRESH, "opaque"));
+        org.junit.jupiter.api.Assertions.assertThrows(ForbiddenException.class,
+                () -> interceptor.preHandle(unsafe, new MockHttpServletResponse(), new Object()));
+
+        unsafe.setCookies(new Cookie(AuthCookies.REFRESH, "opaque"), new Cookie(AuthCookies.CSRF, "csrf"));
+        unsafe.addHeader(AuthCookies.CSRF_HEADER, "csrf");
+        assertTrue(interceptor.preHandle(unsafe, new MockHttpServletResponse(), new Object()));
     }
 }

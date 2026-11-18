@@ -14,7 +14,7 @@ import com.example.backend.security.AuthInterceptor;
 import com.example.backend.security.CurrentUser;
 import com.example.backend.security.Permissions;
 import com.example.backend.service.inventory.InventoryAdminService;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.domain.PageImpl;
@@ -205,7 +205,7 @@ class AdminInventoryControllerTest {
         item.setId(2L);
         item.setProduct(p);
         item.setQuantity(1);
-        ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+        ObjectMapper mapper = new ObjectMapper();
 
         String productJson = mapper.writeValueAsString(ProductResponse.from(p, 3));
         String cartJson = mapper.writeValueAsString(CartResponse.from(1L, List.of(item), Map.of(1L, 3)));

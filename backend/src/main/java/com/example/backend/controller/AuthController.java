@@ -8,7 +8,6 @@ import com.example.backend.dto.FacebookAuthRequest;
 import com.example.backend.dto.ForgotPasswordRequest;
 import com.example.backend.dto.GoogleAuthRequest;
 import com.example.backend.dto.LoginRequest;
-import com.example.backend.dto.RefreshTokenRequest;
 import com.example.backend.dto.RegisterRequest;
 import com.example.backend.dto.ResetPasswordRequest;
 import com.example.backend.dto.TokenPairResponse;
@@ -17,11 +16,13 @@ import com.example.backend.entity.User;
 import com.example.backend.exception.FacebookLoginUnavailableException;
 import com.example.backend.exception.GoogleLoginUnavailableException;
 import com.example.backend.security.AuthGuard;
+import com.example.backend.security.AuthCookies;
 import com.example.backend.security.LoginThrottle;
 import com.example.backend.security.PasswordResetThrottle;
 import com.example.backend.service.AuthService;
 import com.example.backend.service.PasswordResetService;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
@@ -35,6 +36,7 @@ public class AuthController {
     @Autowired private AuthService authService;
     @Autowired private AuthGuard authGuard;
     @Autowired private PasswordResetService passwordResetService;
+    @Autowired private AuthCookies authCookies;
 
     @PostMapping("/register")
     public ResponseEntity<ApiResponse<UserResponse>> register(@Valid @RequestBody RegisterRequest body) {
@@ -43,19 +45,34 @@ public class AuthController {
     }
 
     @PostMapping("/login")
-    public ApiResponse<AuthResponse> login(@Valid @RequestBody LoginRequest body, HttpServletRequest request) {
+    public ApiResponse<UserResponse> login(@Valid @RequestBody LoginRequest body, HttpServletRequest request,
+                                           HttpServletResponse response,
+                                           @RequestHeader(value = "X-Remember-Me", defaultValue = "true") boolean remember) {
         // getRemoteAddr(): X-Forwarded-For is client-controlled and deliberately not trusted for throttling.
-        return ApiResponse.of(authService.login(body.username(), body.password(), request.getRemoteAddr()));
+        AuthResponse session = authService.login(body.username(), body.password(), request.getRemoteAddr());
+        authCookies.setSession(response, session.accessToken(), session.refreshToken(), remember);
+        authCookies.csrfToken(request, response);
+        return ApiResponse.of(session.user());
     }
 
     @PostMapping("/google")
-    public ApiResponse<AuthResponse> loginWithGoogle(@RequestBody GoogleAuthRequest request) {
-        return ApiResponse.of(authService.loginWithGoogle(request));
+    public ApiResponse<UserResponse> loginWithGoogle(@RequestBody GoogleAuthRequest request, HttpServletRequest servletRequest,
+                                                     HttpServletResponse response,
+                                                     @RequestHeader(value = "X-Remember-Me", defaultValue = "true") boolean remember) {
+        AuthResponse session = authService.loginWithGoogle(request);
+        authCookies.setSession(response, session.accessToken(), session.refreshToken(), remember);
+        authCookies.csrfToken(servletRequest, response);
+        return ApiResponse.of(session.user());
     }
 
     @PostMapping("/facebook")
-    public ApiResponse<AuthResponse> loginWithFacebook(@Valid @RequestBody FacebookAuthRequest body) {
-        return ApiResponse.of(authService.loginWithFacebook(body));
+    public ApiResponse<UserResponse> loginWithFacebook(@Valid @RequestBody FacebookAuthRequest body,
+                                                       HttpServletRequest request, HttpServletResponse response,
+                                                       @RequestHeader(value = "X-Remember-Me", defaultValue = "true") boolean remember) {
+        AuthResponse session = authService.loginWithFacebook(body);
+        authCookies.setSession(response, session.accessToken(), session.refreshToken(), remember);
+        authCookies.csrfToken(request, response);
+        return ApiResponse.of(session.user());
     }
 
     /** Always 200 {data:null} for a well-formed request: the answer never reveals whether the e-mail has an account. */
@@ -72,14 +89,24 @@ public class AuthController {
     }
 
     @PostMapping("/refresh")
-    public ApiResponse<TokenPairResponse> refresh(@Valid @RequestBody RefreshTokenRequest body) {
-        return ApiResponse.of(authService.refresh(body.refreshToken()));
+    public ApiResponse<Void> refresh(HttpServletRequest request, HttpServletResponse response,
+                                     @RequestHeader(value = "X-Remember-Me", defaultValue = "true") boolean remember) {
+        TokenPairResponse session = authService.refresh(authCookies.getRefreshToken(request));
+        authCookies.setSession(response, session.accessToken(), session.refreshToken(), remember);
+        authCookies.csrfToken(request, response);
+        return ApiResponse.of(null);
     }
 
     @PostMapping("/logout")
-    public ApiResponse<Void> logout(@Valid @RequestBody RefreshTokenRequest body) {
-        authService.logout(body.refreshToken());
+    public ApiResponse<Void> logout(HttpServletRequest request, HttpServletResponse response) {
+        authService.logout(authCookies.getRefreshToken(request));
+        authCookies.clearSession(response);
         return ApiResponse.of(null);
+    }
+
+    @GetMapping("/csrf")
+    public ApiResponse<String> csrf(HttpServletRequest request, HttpServletResponse response) {
+        return ApiResponse.of(authCookies.csrfToken(request, response));
     }
 
     @GetMapping("/me")

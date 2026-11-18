@@ -5,6 +5,7 @@ import com.example.backend.entity.User;
 import com.example.backend.exception.GlobalExceptionHandler;
 import com.example.backend.repository.UserRepository;
 import com.example.backend.security.AuthInterceptor;
+import com.example.backend.security.AuthCookies;
 import com.example.backend.security.JwtService;
 import com.example.backend.security.TestJwt;
 import com.example.backend.service.AddressService;
@@ -42,7 +43,7 @@ class DisabledUserApiAccessTest {
         ReflectionTestUtils.setField(controller, "addressService", addressService);
         return MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler())
-                .addInterceptors(new AuthInterceptor(jwt, users))
+                .addInterceptors(new AuthInterceptor(jwt, users, new AuthCookies(false, 900, 14)))
                 .build();
     }
 

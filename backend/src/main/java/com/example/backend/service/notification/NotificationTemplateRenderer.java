@@ -74,6 +74,7 @@ public class NotificationTemplateRenderer {
     /** Fixed subject per type. */
     public String title(NotificationType type) {
         return switch (type) {
+            case ACCOUNT_CREATED -> "EcoGreen: Tài khoản đã được tạo";
             case ORDER_CREATED -> "EcoGreen: Đặt hàng thành công";
             case PAYMENT_SUCCESS -> "EcoGreen: Thanh toán thành công";
             case ORDER_SHIPPED -> "EcoGreen: Đơn hàng đang được giao";
@@ -97,6 +98,7 @@ public class NotificationTemplateRenderer {
         Dyn ret = new Dyn(id(c.get("returnId")));
         List<List<Object>> out = new ArrayList<>();
         switch (type) {
+            case ACCOUNT_CREATED -> out.add(List.of("Tài khoản EcoGreen của bạn đã được tạo thành công. Bạn có thể đăng nhập để mua sắm và theo dõi đơn hàng."));
             case ORDER_CREATED -> {
                 out.add(List.of("Cảm ơn bạn đã đặt hàng. Đơn hàng #", order, " đã được ghi nhận."));
                 addTotal(out, c);

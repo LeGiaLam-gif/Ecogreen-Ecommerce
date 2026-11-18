@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import ProductCard from '../components/ProductCard';
 import BannerSlider from '../components/BannerSlider';
 import CategoryFilter from '../components/CategoryFilter';
 import { getProducts } from '../services/productApi';
 import { getAllCategories } from '../services/categoryApi';
+import { trackEvent } from '../services/analyticsTracking';
 import './Home.css';
 
 const PAGE_SIZE = 12;
@@ -18,10 +19,20 @@ const Home = ({ searchTerm }) => {
   const [categories, setCategories] = useState([]);
   const [loadingMore, setLoadingMore] = useState(false);
   const [selectedCategoryId, setSelectedCategoryId] = useState(null);
+  const [minPrice, setMinPrice] = useState('');
+  const [maxPrice, setMaxPrice] = useState('');
+  const [inStockOnly, setInStockOnly] = useState(false);
+  const [sort, setSort] = useState('createdAt,desc');
   const [debouncedTerm, setDebouncedTerm] = useState((searchTerm || '').trim());
   const moreController = useRef(null);
 
-  const queryKey = `${debouncedTerm}|${selectedCategoryId ?? ''}`;
+  const filters = useMemo(() => ({
+    minPrice: minPrice === '' ? undefined : Number(minPrice),
+    maxPrice: maxPrice === '' ? undefined : Number(maxPrice),
+    inStock: inStockOnly || undefined,
+    sort,
+  }), [minPrice, maxPrice, inStockOnly, sort]);
+  const queryKey = JSON.stringify({ term: debouncedTerm, category: selectedCategoryId, filters });
   const loading = list.key !== queryKey;
   const products = list.items;
   const meta = list.meta;
@@ -48,12 +59,20 @@ const Home = ({ searchTerm }) => {
     const controller = new AbortController();
     const { signal } = controller;
     getProducts(
-      { keyword: debouncedTerm || undefined, categoryId: selectedCategoryId ?? undefined, page: 0, size: PAGE_SIZE },
+      { keyword: debouncedTerm || undefined, categoryId: selectedCategoryId ?? undefined, ...filters, page: 0, size: PAGE_SIZE },
       { signal },
     )
       .then((result) => {
         if (isCancelled(signal)) return;
         setList({ key: queryKey, items: result.items || [], meta: result.meta || null, error: '' });
+        if (debouncedTerm || selectedCategoryId || filters.minPrice != null || filters.maxPrice != null || filters.inStock) {
+          void trackEvent('product_search', {
+            hasKeyword: Boolean(debouncedTerm),
+            categoryId: selectedCategoryId,
+            hasPriceFilter: filters.minPrice != null || filters.maxPrice != null,
+            inStock: Boolean(filters.inStock),
+          });
+        }
       })
       .catch((err) => {
         if (isCancelled(signal)) return;
@@ -68,7 +87,7 @@ const Home = ({ searchTerm }) => {
       controller.abort();
       if (moreController.current) moreController.current.abort();
     };
-  }, [debouncedTerm, selectedCategoryId, queryKey]);
+  }, [debouncedTerm, selectedCategoryId, filters, queryKey]);
 
   const hasMore = !loading && meta !== null && meta.page + 1 < meta.totalPages;
 
@@ -80,7 +99,7 @@ const Home = ({ searchTerm }) => {
     const { signal } = controller;
     setLoadingMore(true);
     getProducts(
-      { keyword: debouncedTerm || undefined, categoryId: selectedCategoryId ?? undefined, page: meta.page + 1, size: PAGE_SIZE },
+      { keyword: debouncedTerm || undefined, categoryId: selectedCategoryId ?? undefined, ...filters, page: meta.page + 1, size: PAGE_SIZE },
       { signal },
     )
       .then((result) => {
@@ -152,6 +171,33 @@ const Home = ({ searchTerm }) => {
           onSelectCategory={(id) => setSelectedCategoryId(id)}
         />
       )}
+
+      <section aria-label="Lọc và sắp xếp sản phẩm" className="catalog-controls"
+        style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'end', padding: '16px 0' }}>
+        <label style={{ display: 'grid', gap: '4px' }}>
+          Giá từ
+          <input aria-label="Giá thấp nhất" type="number" min="0" value={minPrice}
+            onChange={(event) => setMinPrice(event.target.value)} />
+        </label>
+        <label style={{ display: 'grid', gap: '4px' }}>
+          Giá đến
+          <input aria-label="Giá cao nhất" type="number" min="0" value={maxPrice}
+            onChange={(event) => setMaxPrice(event.target.value)} />
+        </label>
+        <label style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+          <input type="checkbox" checked={inStockOnly} onChange={(event) => setInStockOnly(event.target.checked)} />
+          Còn hàng
+        </label>
+        <label style={{ display: 'grid', gap: '4px' }}>
+          Sắp xếp
+          <select aria-label="Sắp xếp sản phẩm" value={sort} onChange={(event) => setSort(event.target.value)}>
+            <option value="createdAt,desc">Mới nhất</option>
+            <option value="price,asc">Giá tăng dần</option>
+            <option value="price,desc">Giá giảm dần</option>
+            <option value="name,asc">Tên A-Z</option>
+          </select>
+        </label>
+      </section>
 
       <div className="home-content">
         {loading ? (

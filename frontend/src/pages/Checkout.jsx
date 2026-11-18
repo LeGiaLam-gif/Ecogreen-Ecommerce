@@ -4,6 +4,7 @@ import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { checkout, previewCheckout } from '../services/orderApi';
 import { getAddresses } from '../services/addressApi';
+import { trackEvent } from '../services/analyticsTracking';
 
 const DEBOUNCE_MS = 500;
 const NEW_ADDRESS = 'new';
@@ -39,6 +40,7 @@ const Checkout = () => {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const submittingRef = useRef(false);
+  const checkoutTracked = useRef(false);
 
   const hasItems = cartItems.length > 0;
 
@@ -56,6 +58,13 @@ const Checkout = () => {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (hasItems && !checkoutTracked.current) {
+      checkoutTracked.current = true;
+      void trackEvent('checkout_started', { itemCount: cartItems.length });
+    }
+  }, [hasItems, cartItems.length]);
 
   // The discount code settles 500 ms after the last keystroke; only then is the preview asked again.
   useEffect(() => {

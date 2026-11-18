@@ -101,6 +101,15 @@ const Navbar = ({ searchTerm, setSearchTerm }) => {
                   <div className="dropdown-divider" />
 
                   <Link
+                    to="/account/profile"
+                    className="dropdown-item"
+                    onClick={() => setDropdownOpen(false)}
+                  >
+                    <span className="item-icon">👤</span>
+                    <span>Hồ sơ cá nhân</span>
+                  </Link>
+
+                  <Link
                     to="/orders"
                     className="dropdown-item"
                     onClick={() => setDropdownOpen(false)}

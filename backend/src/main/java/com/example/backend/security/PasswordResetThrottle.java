@@ -1,5 +1,6 @@
 package com.example.backend.security;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -35,6 +36,7 @@ public class PasswordResetThrottle {
     private final long windowMs;
     private final Clock clock;
 
+    @Autowired
     public PasswordResetThrottle(@Value("${ecogreen.auth.reset-max-requests:5}") int maxRequests,
                                  @Value("${ecogreen.auth.reset-window-seconds:900}") long windowSeconds) {
         this(maxRequests, windowSeconds, Clock.systemUTC());

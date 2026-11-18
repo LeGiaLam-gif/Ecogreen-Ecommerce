@@ -7,6 +7,7 @@ import com.example.backend.dto.TokenPairResponse;
 import com.example.backend.dto.UserResponse;
 import com.example.backend.entity.Role;
 import com.example.backend.entity.User;
+import com.example.backend.event.UserRegisteredEvent;
 import com.example.backend.exception.BadRequestException;
 import com.example.backend.exception.ConflictException;
 import com.example.backend.exception.FacebookLoginUnavailableException;
@@ -22,6 +23,7 @@ import com.example.backend.security.FacebookIdentityVerifier;
 import com.example.backend.security.GoogleIdentity;
 import com.example.backend.security.GoogleIdentityVerifier;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -50,6 +52,7 @@ public class AuthService {
     @Autowired private CartService cartService;
     @Autowired private GoogleIdentityVerifier googleVerifier;
     @Autowired private FacebookIdentityVerifier facebookVerifier;
+    @Autowired private ApplicationEventPublisher eventPublisher;
 
     @Transactional
     public User register(String username, String email, String password) {
@@ -79,6 +82,7 @@ public class AuthService {
         User saved = saveNewUser(user, "Tên đăng nhập hoặc email này đã được sử dụng.");
         // Every authenticated user gets exactly one server-side cart (1-1).
         cartService.createCartForUser(saved);
+        eventPublisher.publishEvent(new UserRegisteredEvent(saved.getId()));
         return saved;
     }
 
@@ -209,6 +213,7 @@ public class AuthService {
 
                 user = saveNewUser(newUser, GOOGLE_AUTH_FAILED);
                 cartService.createCartForUser(user);
+                eventPublisher.publishEvent(new UserRegisteredEvent(user.getId()));
             }
         }
 
@@ -270,6 +275,7 @@ public class AuthService {
 
             user = saveNewUser(newUser, "Email này đã được dùng cho một tài khoản EcoGreen. Hãy đăng nhập bằng mật khẩu hoặc Google.");
             cartService.createCartForUser(user);
+            eventPublisher.publishEvent(new UserRegisteredEvent(user.getId()));
         }
 
         return issueSession(user);

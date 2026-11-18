@@ -2,7 +2,7 @@ package com.example.backend.entity;
 
 import jakarta.persistence.*;
 
-/** B01-P3: a permission code such as "product:create" (catalogue: security/Permissions.java). */
+/** B01-P3: a permission code such as {@code product:create} (catalogue: security/Permissions.java). */
 @Entity
 @Table(name = "permissions")
 public class Permission {

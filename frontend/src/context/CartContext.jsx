@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import * as cartApi from '../services/cartApi';
 import { useAuth } from './AuthContext';
+import { trackEvent } from '../services/analyticsTracking';
 
 const CartContext = createContext();
 
@@ -58,6 +59,7 @@ export const CartProvider = ({ children }) => {
 
   const addToCart = async (productId, quantity = 1) => {
     applyCart(await cartApi.addToCart(productId, quantity));
+    void trackEvent('add_to_cart', { productId, quantity });
   };
 
   const updateQuantity = async (cartItemId, quantity) => {
@@ -65,7 +67,12 @@ export const CartProvider = ({ children }) => {
   };
 
   const removeFromCart = async (cartItemId) => {
+    const removed = cart.items.find((item) => item.id === cartItemId);
     applyCart(await cartApi.removeCartItem(cartItemId));
+    void trackEvent('remove_from_cart', {
+      productId: removed?.product?.id,
+      quantity: removed?.quantity,
+    });
   };
 
   const clearCart = async () => {

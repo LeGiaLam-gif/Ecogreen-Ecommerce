@@ -20,6 +20,7 @@ import OrderSuccess from './pages/OrderSuccess';
 import Orders from './pages/Orders';
 import OrderDetail from './pages/OrderDetail';
 import Addresses from './pages/Addresses';
+import CustomerProfile from './pages/CustomerProfile';
 import FAQ from './pages/FAQ';
 import ContactUs from './pages/ContactUs';
 import ReturnPolicy from './pages/ReturnPolicy';
@@ -66,6 +67,7 @@ function AppContent() {
           <Route path="/orders" element={<ProtectedRoute><Orders /></ProtectedRoute>} />
           <Route path="/orders/:id" element={<ProtectedRoute><OrderDetail /></ProtectedRoute>} />
           <Route path="/account/addresses" element={<ProtectedRoute><Addresses /></ProtectedRoute>} />
+          <Route path="/account/profile" element={<ProtectedRoute><CustomerProfile /></ProtectedRoute>} />
 
           {/* Admin CMS - ADMIN or MANAGER (UX only); every API call is re-checked against the permissions server-side. */}
           <Route

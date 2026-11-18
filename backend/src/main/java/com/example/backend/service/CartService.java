@@ -3,6 +3,7 @@ package com.example.backend.service;
 import com.example.backend.dto.CartResponse;
 import com.example.backend.entity.Cart;
 import com.example.backend.entity.CartItem;
+import com.example.backend.entity.OrderItem;
 import com.example.backend.entity.Product;
 import com.example.backend.entity.User;
 import com.example.backend.exception.BadRequestException;
@@ -40,6 +41,29 @@ public class CartService {
         Cart cart = new Cart();
         cart.setUser(user);
         return cartRepository.save(cart);
+    }
+
+    /** Locks the cart before expiry changes the order/stock, matching the checkout lock order. */
+    @Transactional
+    public Cart lockOrCreateCart(User user) {
+        return cartRepository.findByUserIdForUpdate(user.getId()).orElseGet(() -> createCartForUser(user));
+    }
+
+    /** Restores expired order lines without applying the current add-to-cart stock limit. */
+    @Transactional
+    public void restoreExpiredOrderItems(Cart cart, List<OrderItem> orderItems) {
+        for (OrderItem orderItem : orderItems) {
+            Long productId = orderItem.getProduct().getId();
+            CartItem item = cartItemRepository.findByCartIdAndProductId(cart.getId(), productId)
+                    .orElseGet(() -> {
+                        CartItem created = new CartItem();
+                        created.setCart(cart);
+                        created.setProduct(orderItem.getProduct());
+                        return created;
+                    });
+            item.setQuantity(Math.addExact(item.getQuantity(), orderItem.getQuantity()));
+            cartItemRepository.save(item);
+        }
     }
 
     public Cart getOrCreateCart(User user) {

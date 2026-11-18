@@ -22,6 +22,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.HashSet;
 import java.util.Optional;
@@ -46,6 +47,7 @@ class AuthServiceFacebookLoginTest {
     @Mock private RefreshTokenService refreshTokenService;
     @Mock private CartService cartService;
     @Mock private FacebookIdentityVerifier facebookVerifier;
+    @Mock private ApplicationEventPublisher eventPublisher;
     @Spy private JwtService jwtService = new JwtService(TestJwt.SECRET, 900);
 
     @InjectMocks private AuthService authService;

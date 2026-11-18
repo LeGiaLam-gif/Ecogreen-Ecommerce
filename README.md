@@ -1,314 +1,291 @@
-# EcoGreen
+# EcoGreen E-Commerce
 
-EcoGreen is a full-stack web shop for eco-friendly everyday products (reusable bottles, kitchenware, recycled
-accessories and similar). Customers browse a catalogue, fill a cart and place orders; staff manage the catalogue, orders,
-returns and users from an admin area. The storefront and admin UI are in Vietnamese.
+EcoGreen là ứng dụng thương mại điện tử bán các sản phẩm thân thiện với môi trường. Khách hàng có thể duyệt sản phẩm, quản lý giỏ hàng, đặt hàng, thanh toán và theo dõi đơn; nhân viên quản lý danh mục, kho, đơn hàng, đổi trả và khách hàng trong khu vực quản trị.
 
-> **Status:** a working course/portfolio-grade application. Online payment goes through VNPay (sandbox by default) and
-> a development-only mock provider; several production features are not built yet — see
-> [What is not included](#what-is-not-included).
+Ứng dụng gồm giao diện React, REST API Spring Boot và cơ sở dữ liệu PostgreSQL. Giao diện hiện hỗ trợ tiếng Việt.
 
-## What this project does
+## 1. Tính năng hiện có
 
-A visitor can browse products without an account. After signing up (or signing in with Google), a customer keeps a server-side
-cart, checks out with delivery details, pays for the order and follows it in their order history. An administrator uses the
-admin area to keep the catalogue up to date, move orders through their statuses, handle return requests and review sales.
+### Khách hàng
 
-## Features
+- Duyệt, tìm kiếm và lọc sản phẩm theo danh mục; xem chi tiết và hình ảnh sản phẩm.
+- Đăng ký, đăng nhập bằng tài khoản/mật khẩu; hỗ trợ đăng nhập Google hoặc Facebook khi được cấu hình.
+- Giỏ hàng gắn với tài khoản, kiểm tra tồn kho khi cập nhật số lượng.
+- Sổ địa chỉ giao hàng; xem trước tổng tiền, mã giảm giá, phí vận chuyển trước khi đặt hàng.
+- Quản lý hồ sơ cá nhân; gửi đánh giá 1–5 sao cho sản phẩm trong đơn đã giao.
+- Theo dõi đơn hàng và lịch sử trạng thái; hủy đơn chưa thanh toán khi đáp ứng điều kiện.
+- Gửi yêu cầu đổi/trả cho đơn đã giao, chọn sản phẩm/số lượng và đính kèm ảnh.
+- Khôi phục mật khẩu qua email khi SMTP được cấu hình.
+- Trang FAQ, liên hệ, điều khoản, bảo mật và chính sách đổi trả.
 
-### Customer features
+### Quản trị
 
-- Browse products, filter by category and search by keyword. Search, filtering and paging are done by the server (`GET /api/v1/products`, 12 per page with "load more", 300 ms debounce while typing); a keyword matches name and description.
-- Product detail page (by id or slug) with an image gallery and a struck-through compare price when the product has one.
-- Server-side shopping cart with stock checks (`/api/v1/cart`); each line shows the quantity still available.
-- Checkout (`/checkout`): pick a saved address or type the recipient, enter an optional discount code, and see the server-computed breakdown (items, discount, shipping, total) before confirming. Shipping is a flat fee below a free-shipping threshold.
-- Address book (`/account/addresses`): up to 10 saved addresses, one default, add / edit / delete / set default. Checkout offers these addresses (the default is preselected).
-- Choose a payment method on the payment page. **Cash on delivery** needs no payment step. **VNPAY** sends the browser to the
-  VNPay gateway; the order becomes paid only when VNPay's signed server-to-server callback arrives (returning to the shop proves
-  nothing). **VietQR** and **MoMo** show a static QR code in the UI; the backend has no payment provider for them, so a staff member
-  confirms the payment. With `PAYMENT_MOCK_ENABLED=true` (the default when the variable is unset) a development-only mock provider
-  and "mock pay" buttons are available; set it to `false` outside development.
-- Order history and order detail with a status timeline; an unpaid order can be cancelled by its owner.
-- Return request for a `DELIVERED` order: choose the items and quantities, give a reason and description, and attach 1–5 photos
-  (JPG/PNG/WebP, up to 5 MB each); only one open request per order. The customer follows its status in the order detail.
-- Customers receive an email for order and return events when SMTP is configured; every attempt is logged (see the admin
-  Notifications tab). The customer-facing notification list exists in the API only.
-- Register, sign in with username and password, or sign in with Google (when configured). Sessions renew automatically.
-- FAQ, contact and return-policy pages. The chat widget gives canned replies; it is not connected to a support team.
+- Tổng quan về đơn chờ thanh toán, đổi/trả, tồn kho thấp, hoàn tiền và khách hàng.
+- Quản lý sản phẩm, ảnh, trạng thái đăng bán và danh mục phân cấp.
+- Theo dõi tồn kho, lịch sử giao dịch kho và điều chỉnh tồn có ghi lý do.
+- Tra cứu đơn, cập nhật trạng thái; xác nhận thanh toán và hoàn tiền theo quyền.
+- Xét duyệt yêu cầu đổi/trả, ghi chú, tiếp nhận hàng và khởi tạo hoàn tiền.
+- Tìm kiếm khách hàng, xem lịch sử đơn và quản lý trạng thái tài khoản theo quyền.
+- Quản lý mã giảm giá và xem nhật ký gửi thông báo.
+- Xem nhật ký thao tác quản trị và thay đổi trạng thái đơn theo quyền `audit:view`.
 
-### Management / admin features
+### Giới hạn cần biết
 
-The admin area is split into tabs. A tab, and each action button inside it, is shown only when the signed-in user holds the
-permission the server requires for it (the server checks it again on every request).
+- VNPay dùng cấu hình sandbox nếu được cung cấp thông tin kết nối. VietQR và MoMo hiện chỉ hiển thị QR tĩnh, không có tích hợp xác nhận tự động. Thanh toán giả lập chỉ dành cho phát triển; tắt `PAYMENT_MOCK_ENABLED` ngoài môi trường local.
+- Hoàn tiền được nhân viên ghi nhận/xử lý trong ứng dụng; chưa gọi API hoàn tiền của cổng thanh toán.
+- Biểu đồ doanh thu dùng API quản trị cũ, chỉ dành cho `ADMIN`. Các báo cáo tổng quan khác được kiểm tra theo permission tương ứng.
+- Email thông báo cho tài khoản, đơn hàng, thanh toán và đổi trả chỉ gửi khi SMTP được cấu hình. Chat hỗ trợ hiện trả lời theo kịch bản, không kết nối tổng đài.
+- Đây là ứng dụng học tập/portfolio; cần cấu hình và rà soát bảo mật trước khi triển khai công khai.
 
-- Overview: action cards (orders waiting for payment, returns waiting for review, products running low, refund amount this
-  month), a "top customers by order count" table, the newest orders, and the sales dashboard (revenue over time, orders by status,
-  top products, selectable date range; the sales dashboard is ADMIN-only because it uses the legacy reports).
-- Products: search and filter, create (always as a draft), edit, upload several images (they are saved in the order you arrange
-  them before saving), delete images, publish with the missing requirements explained, deactivate (soft delete) and reopen.
-- Categories: a tree you can expand and collapse, with a parent picker and "add child".
-- Inventory: stock on hand, reserved and available per product, a low-stock filter, manual adjustments (a reason is required)
-  and the stock history of a product.
-- Orders: search and filter orders, and move each one to the next allowed status (the server decides which moves are allowed), confirm a VietQR / MoMo payment, and complete a pending refund.
-- Returns: request more information from the customer, approve or reject with a note, mark the goods as received (this restocks them) and start the refund; view all the customer's photos. Staff complete the pending refund here or in the Orders tab; there is no automatic gateway refund.
-- Customers: server-side search, role and active filters with paging, a detail view with order history; lock / unlock an account
-  (a locked user is signed out everywhere); delete only a user with no orders or return requests (otherwise lock the account).
-  You cannot lock or delete yourself or the last active admin.
-- Discount codes: list, create, edit and delete percent or fixed-amount codes with validity dates.
-- Notifications: the log of customer emails (sent / failed / pending) with a status filter; no message text is shown.
+## 2. Thiết lập và chạy lần đầu
 
-Access is by role: `CUSTOMER`, `MANAGER`, `ADMIN`. The backend has a permission system (29 permission codes, assigned to roles in
-the database). `ADMIN` and `MANAGER` can open `/admin` and see the tabs their permissions allow (by default a `MANAGER` cannot
-lock, unlock or delete users, and has no `audit:view` or `system:configure`). The only endpoints that still require the `ADMIN`
-role are the five legacy ones under `/api/admin` (`/stats` and the four `/reports/*` the sales dashboard reads).
+### Yêu cầu
 
-### What is not included
+- Docker Desktop hoặc Docker Engine có Docker Compose (cách chạy khuyến nghị).
+- Nếu chạy từng dịch vụ riêng: JDK 21, Node.js 20.19+ hoặc 22.12+, npm, PostgreSQL 16 và `psql`.
 
-- Payments: no gateway other than VNPay (and the development mock); MoMo and VietQR exist only as static QR codes in the UI.
-  Refunds are recorded by staff; nothing is refunded automatically at the gateway. Expired `PENDING_PAYMENT` orders are not cancelled automatically.
-- Screens: no admin screen to change a user's roles (the API exists), no screen for the analytics events list, no customer-facing notification list.
-- Accounts: password reset by e-mail (needs `SMTP_*`), sign-in with Google and Facebook; no e-mail verification at registration.
-- Operations: no audit log, no Docker image for the application, no CI pipeline, no health/metrics endpoints, no frontend tests.
-- The five legacy `/api/admin` endpoints still use the older API shape.
+### Cách A — Chạy toàn bộ bằng Docker Compose
 
-Remaining planned work is in [`docs/ai/MODULE_SPECS.md`](./docs/ai/MODULE_SPECS.md).
+Từ thư mục gốc repository, tạo file cấu hình riêng và sửa các giá trị bắt buộc:
 
-## How the system works
-
-```
-Browser (React, Vite dev server :5173)
-   │  /api/* is proxied to the backend in development
-   ▼
-Spring Boot REST API (:8081) ──► PostgreSQL
+```powershell
+Copy-Item .env.example .env
 ```
 
-1. The frontend calls the REST API through one axios instance (`frontend/src/services/http.js`).
-2. Signing in returns a short-lived access token (JWT, 15 minutes) and a rotating refresh token. The frontend renews the access
-   token automatically when it expires.
-3. The backend decides what each caller may do (roles and permissions come from the token, ownership is checked per order);
-   the frontend only hides buttons.
-4. Checkout is one database transaction: lock the cart → validate stock, discount and shipping → create the order (`PENDING_PAYMENT`) with a snapshot of the current
-   prices → reserve stock → record the first status-history row → create a pending payment → empty the cart. Afterwards every
-   status change goes through one validated state machine.
+Trong `.env`, đặt `DB_PASSWORD` và `JWT_SECRET` (khóa JWT tối thiểu 32 bytes). Có thể tạo khóa bằng `openssl rand -base64 48`. Không commit `.env` hoặc chia sẻ các khóa/mật khẩu thật.
 
-## Technology stack
+Khởi chạy:
 
-| Layer | Technology |
-|---|---|
-| Frontend | React 19, Vite 8, React Router 7, axios, `qrcode.react`; ESLint 9 |
-| Backend | Java 21, Spring Boot 4.0.5 (Web, Data JPA/Hibernate, Validation, Mail), Maven wrapper |
-| Security | JWT (jjwt, HS256), BCrypt (`spring-security-crypto`), Google ID-token verification (`google-api-client`) |
-| Database | PostgreSQL 16 |
-| Tests | JUnit 5 + Mockito (backend); a dependency-free Node script for the frontend token-refresh logic |
-| Payments / email | VNPay (HMAC-signed redirect and callback), SMTP through Spring Mail |
-| Local infrastructure | Docker Compose (PostgreSQL only) |
-
-## Project structure
-
-```
-backend/                 Spring Boot application (package com.example.backend)
-  src/main/java/.../       api, config, controller, dto, entity, event, exception, repository, security, service, storage
-  src/main/resources/      application.properties, db/migration/ (hand-applied SQL migrations)
-  src/test/                unit tests
-frontend/                React application
-  src/pages, components    screens and shared UI
-  src/context, hooks       AuthContext, CartContext, usePermission
-  src/pages/admin          admin dashboard and its tabs
-  src/services, utils      API modules (http.js is the single HTTP client) and helpers
-  scripts/                 verify-auth-refresh.mjs
-database/                init-postgres.sql (schema), seed-data.sql (demo data, destructive), recycled_products.xlsx (spreadsheet of recycled-product data; not read by any code)
-docker/                  docker-compose.yml (PostgreSQL)
-docs/ai/                 module contracts (contracts/), remaining-work specification, project requirements (.docx) and a diagram
-API.md, DATABASE.md      reference documentation
-CLAUDE.md                rules for AI coding agents
+```powershell
+docker compose up -d --build
+docker compose ps
 ```
 
-## Prerequisites
+- Cửa hàng: <http://localhost:5173>
+- API: <http://localhost:8081>
+- PostgreSQL: `localhost:5432`
 
-- **JDK 21**
-- **Node.js 20.19+ or 22.12+** (required by Vite 8) with npm
-- **PostgreSQL 16** — either installed locally or via Docker (Docker Desktop / Docker Engine with Compose)
-- The `psql` command-line client (to apply the SQL files)
-- Optional: a Google OAuth 2.0 **Web client ID** if you want Google sign-in
+Compose tự khởi tạo schema, dữ liệu demo (mặc định `SEED_DEMO_DATA=true`) và các migration trên **volume PostgreSQL mới, rỗng**. Các lần chạy sau giữ nguyên dữ liệu; thay đổi script khởi tạo không tự áp dụng lại vào volume đã tồn tại.
 
-Maven does not need to be installed; the project uses the Maven wrapper.
+Tài khoản demo mặc định trên dữ liệu seed: `admin / admin123` và `khachhang / 123456`. Chỉ dùng ở máy local; không đưa thông tin này lên môi trường công khai. Để không nạp dữ liệu demo, đặt `SEED_DEMO_DATA=false` trong `.env` trước lần khởi tạo database đầu tiên.
 
-## Installation
+Một số lệnh hữu ích:
 
-```bash
-git clone https://github.com/LeGiaLam-gif/Ecogreen-Ecommerce.git
-cd Ecogreen-Ecommerce
-cd frontend && npm install && cd ..
+```powershell
+docker compose logs -f backend
+docker compose down
 ```
 
-Use `npm install`, not `npm ci`: `npm ci` currently fails because `frontend/package-lock.json` is out of sync with
-`package.json`.
+`docker compose down` không xóa dữ liệu trong named volume. Không dùng `docker compose down -v` nếu muốn giữ database.
 
-## Configuration
+### Cách B — Chạy frontend/backend riêng
 
-The backend reads its settings from **environment variables and `backend/src/main/resources/application.properties`**.
-Spring Boot does **not** read a `.env` file, so export the variables in the shell that starts the backend (or set them in your
-IDE run configuration).
+1. Cài và khởi động PostgreSQL, sau đó tạo database `ecogreen`, chạy schema, dữ liệu mẫu nếu cần và toàn bộ migration theo hướng dẫn ở mục [3. Database](#3-database).
+2. Mở một PowerShell ở thư mục gốc và khai báo cấu hình cho backend. Thay password theo database local; `JWT_SECRET` phải dài ít nhất 32 bytes:
 
-| Variable | Used by | Required | Meaning |
-|---|---|---|---|
-| `JWT_SECRET` | backend | **yes** | Signing key, at least 32 bytes. The backend refuses to start without it. Generate one with `openssl rand -base64 48`. |
-| `DB_PASSWORD` | backend, docker | **yes** | PostgreSQL password. No default exists. `DB_HOST` (localhost), `DB_PORT` (5432), `DB_NAME` (ecogreen) and `DB_USERNAME` (postgres) are optional. |
-| `CORS_ALLOWED_ORIGINS` | backend | no | Origin patterns allowed to call the API, comma separated. Default: any `localhost` / `127.0.0.1` port. In production set the exact site origin. A wrong origin shows up as `403 Invalid CORS request`. |
-| `APP_PUBLIC_URL` | backend | no | Public frontend URL used in the password-reset link (default `http://localhost:5173`). |
-| `GOOGLE_CLIENT_ID` | backend | no | OAuth Web client ID. When empty, Google sign-in is disabled. |
-| `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET`, `FACEBOOK_GRAPH_VERSION` | backend | no | Facebook Login (Meta for Developers). Empty id or secret disables it (503). Never commit the secret. |
-| `VITE_FACEBOOK_APP_ID` | frontend | no | The same App ID (public). Put it in `frontend/.env`. |
-| `VITE_GOOGLE_CLIENT_ID` | frontend | no | The same client ID. Put it in `frontend/.env` (Vite reads env files from `frontend/`). |
-| `UPLOAD_DIR`, `SHIPPING_FLAT_FEE`, `FREE_SHIPPING_THRESHOLD` | backend | no | Upload directory and shipping rule (defaults in `application.properties`). |
-| `PAYMENT_VNPAY_TMN_CODE`, `PAYMENT_VNPAY_SECRET`, `PAYMENT_VNPAY_URL`, `PAYMENT_RETURN_URL` | backend | no | VNPay sandbox/production settings. Without the code and secret the `VNPAY` method fails closed (400). |
-| `PAYMENT_MOCK_ENABLED` | backend | no | Enables the development mock provider. **Defaults to `true` when unset**; set `false` outside development. |
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_AUTH`, `SMTP_STARTTLS` | backend | no | Notification email. Without `SMTP_HOST` no email is sent. |
-| `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, `SPRING_DATASOURCE_PASSWORD` | backend | no | Override the whole database connection (they win over the `DB_*` variables). |
+   ```powershell
+   $env:DB_HOST = "localhost"
+   $env:DB_PORT = "5432"
+   $env:DB_NAME = "ecogreen"
+   $env:DB_USERNAME = "postgres"
+   $env:DB_PASSWORD = "mat_khau_postgres"
+   $env:JWT_SECRET = "thay_bang_khoa_ngau_nhien_toi_thieu_32_bytes"
+   ```
 
-`.env.example` at the repository root lists every variable the code reads. Never commit a real `.env` file or real secrets.
+3. Chạy backend:
 
-The backend connects to `jdbc:postgresql://${DB_HOST}:${DB_PORT}/${DB_NAME}` (default `localhost:5432/ecogreen`) as `DB_USERNAME` (default `postgres`) with `DB_PASSWORD`,
-and listens on port **8081**. CORS follows `CORS_ALLOWED_ORIGINS` (default: any localhost port).
+   ```powershell
+   cd backend
+   .\mvnw.cmd spring-boot:run
+   ```
 
-**Forgot password and email.** `POST /api/v1/auth/forgot-password` mails a 30-minute, single-use link. It needs `SMTP_*`; with `SMTP_HOST` empty nothing is sent. For development use
-Gmail with an App Password (`smtp.gmail.com`, port 587) or MailHog (`SMTP_AUTH=false`). **Facebook Login:** create an app in Meta for Developers, add *Facebook Login*, put `http://localhost:5173` in the allowed
-domains; in Development mode only app roles (admin, developer, tester) can sign in, and going Live needs a public Privacy Policy URL (the app serves `/privacy`) and data-deletion instructions.
+   Backend lắng nghe tại `http://localhost:8081`.
 
-## Database setup
+4. Mở PowerShell khác tại thư mục gốc, cài dependencies và chạy frontend:
 
-The schema comes from `database/init-postgres.sql`. Everything added later (Google sign-in column, refresh tokens, permissions, catalogue, orders, inventory, discounts,
-payments, refunds, returns, addresses, analytics events, notifications) is in SQL files in `backend/src/main/resources/db/migration/` (`V2` to `V90`). **Flyway is not used**; apply the files yourself, in numeric order,
-**before the first backend start**. They are idempotent, so re-running them is safe.
+   ```powershell
+   cd frontend
+   npm install
+   npm run dev
+   ```
 
-**1. Start PostgreSQL and load the schema** — choose one:
+   Mở `http://localhost:5173`. Vite proxy các request `/api` tới backend tại cổng `8081`.
 
-```bash
-# A) Docker (port DB_PORT, default 5432, on the host; DB_PASSWORD is required; init-postgres.sql runs automatically on the first start of an empty volume)
-cd docker && docker compose --env-file ../.env up -d && cd ..
+Spring Boot không tự đọc file `.env`; khi chạy riêng, hãy đặt biến môi trường trong PowerShell hoặc cấu hình chạy của IDE. Các biến OAuth, VNPay và SMTP là tùy chọn.
 
-# B) Local PostgreSQL (port 5432)
-createdb -U postgres ecogreen
-psql -U postgres -d ecogreen -f database/init-postgres.sql
+### Kiểm tra nhanh
+
+```powershell
+Invoke-WebRequest http://localhost:8081/api/v1/products
 ```
 
-**2. Apply the migrations in order** (adjust host/port: `-p $DB_PORT`):
+Lệnh kiểm tra có thể trả về danh sách rỗng nếu chưa có sản phẩm. Kiểm tra backend:
 
-```bash
-for f in $(ls backend/src/main/resources/db/migration/V*.sql | sort -V); do
-  psql -h localhost -p "${DB_PORT:-5432}" -U postgres -d ecogreen -v ON_ERROR_STOP=1 -f "$f"
-done
-```
-
-On Windows, run the same files one by one with `psql ... -f <file>` in this order: V2, V3, V4, V5, V6, V7, V8, V10, V11, V12, V20, V21, V22, V30, V31, V40, V41, V50, V51, V60, V70, V80, V90.
-`V5` renames the legacy `USER` role to `CUSTOMER` and `V6` seeds the permission catalogue and the role → permission mapping. Without them, the roles and permissions are incomplete.
-
-`V40` creates the `discounts` table and `V41` seeds the `discount:view` / `discount:manage` permissions for `ADMIN` and `MANAGER` (Flyway is not active; apply by hand).
-
-`V10`–`V12` add the catalogue columns, the product image table and the category tree (load `database/seed-data.sql` before them). Uploaded product images are stored in the directory given by `UPLOAD_DIR` (default `./uploads`, not committed).
-
-`V30` and `V31` introduce the stock model (`inventory` on hand / reserved and the `inventory_transactions` ledger) and **convert** the existing `products.stock_quantity` values. Apply them in this order with the backend **stopped** and before its first start with this version; the verification queries are in the file headers and in `docs/ai/contracts/B03-inventory.md`.
-
-`V50` and `V51` add the payment gateway fields and the `refunds` table, `V60` the full return model (several items, images, status history), `V80` the `analytics_events` table and `V90` the `notifications` table; details are in the contracts `B06`–`B10` and `DATABASE.md`.
-
-`V70` creates the `addresses` table (customer address book) with its foreign key and the "one default per user" unique index; it changes no existing data. Apply it before relying on that guarantee in the database; details in `docs/ai/contracts/B08-customer.md`.
-
-`V20` re-labels stored orders (`PENDING` → `PENDING_PAYMENT`, `CONFIRMED` → `PROCESSING`) and widens the status check. Stop the old backend before applying it and back up `orders` first.
-
-**3. Point the backend at the right database.** Use the same `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME` and `DB_PASSWORD` for Docker, `psql` and the backend:
-
-```bash
-export DB_PASSWORD='<your password>'   # PowerShell: $env:DB_PASSWORD='<your password>'
-export DB_PORT=5432                    # only if it is not 5432
-```
-If a Docker volume already exists, `POSTGRES_PASSWORD` is ignored: change the password with `ALTER USER postgres WITH PASSWORD '...';`.
-
-**4. Demo data and the first admin (optional).** The application works with empty tables (the storefront shows no products
-until an admin adds some).
-
-- `database/seed-data.sql` loads 5 categories, 8 products and two demo accounts (an admin and a customer; see the file).
-  **It deletes all existing orders, payments, cart items, products and categories first** — use it only on a disposable
-  development database, and never expose the demo accounts.
-- Without the seed, register through `/register`, then grant that user the admin role:
-
-```sql
-INSERT INTO user_roles (user_id, role_id)
-SELECT u.id, r.id FROM users u, roles r WHERE u.username = 'your_username' AND r.name = 'ADMIN';
-```
-
-Reload the page or sign in again; the admin link appears in the navbar.
-
-## Run the backend
-
-```bash
+```powershell
 cd backend
-export JWT_SECRET="$(openssl rand -base64 48)"
-./mvnw spring-boot:run             # Windows: .\mvnw.cmd spring-boot:run
+.\mvnw.cmd test
 ```
 
-If `./mvnw` answers "Permission denied" (a checkout from before the executable bit was committed), run `chmod +x mvnw` or use
-`sh ./mvnw`. The API is then available at `http://localhost:8081`.
-On PowerShell set the secret with `$env:JWT_SECRET = '<at least 32 bytes>'`. A secret generated per shell session invalidates
-existing sign-ins when it changes; keep a stable value if you want sessions to survive restarts.
+Kiểm tra frontend:
 
-## Run the frontend
-
-```bash
+```powershell
 cd frontend
-npm run dev
+npm run lint
+npm run build
 ```
 
-Open `http://localhost:5173`. The dev server proxies `/api` to `http://localhost:8081`.
+## 3. Database
 
-## Run the complete project
+### Công nghệ và dữ liệu
 
-1. Start PostgreSQL and apply the schema and migrations (Database setup).
-2. Start the backend and wait for it to finish starting.
-3. Start the frontend and open `http://localhost:5173`.
+- PostgreSQL 16, database mặc định `ecogreen`.
+- Các bảng bao gồm người dùng/vai trò/quyền; danh mục/sản phẩm/ảnh/đánh giá; giỏ hàng; đơn hàng/lịch sử; tồn kho/sổ giao dịch; thanh toán/hoàn tiền; địa chỉ; đổi trả; mã giảm giá; sự kiện analytics, thông báo và audit log.
+- Hình ảnh tải lên được lưu thành file trong `UPLOAD_DIR` (mặc định `./uploads`), không lưu binary trong PostgreSQL.
+- Cấu hình kết nối: `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD`. Có thể thay bằng `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, `SPRING_DATASOURCE_PASSWORD`.
 
-## Testing and verification
+### Khởi tạo thủ công database mới
 
-```bash
-# Backend unit tests
-cd backend && ./mvnw test
+`database/init-postgres.sql` tạo schema gốc. Các thay đổi tiếp theo nằm trong `backend/src/main/resources/db/migration/`. Dự án **không bật Flyway**; khi chạy ngoài Docker, phải áp dụng SQL theo thứ tự phiên bản trước khi chạy backend lần đầu.
 
-# Frontend
-cd frontend
-npm run lint                           # ESLint
-npm run build                          # production build
-node scripts/verify-auth-refresh.mjs   # token-refresh logic, no network needed
+Ví dụ PowerShell (yêu cầu PostgreSQL client nằm trong `PATH`):
+
+```powershell
+createdb -U postgres ecogreen
+psql -v ON_ERROR_STOP=1 -U postgres -d ecogreen -f database/init-postgres.sql
+
+# Tùy chọn: nạp sản phẩm/tài khoản demo. Chỉ chạy trên database phát triển.
+psql -v ON_ERROR_STOP=1 -U postgres -d ecogreen -f database/seed-data.sql
+
+$migrationDir = "backend\src\main\resources\db\migration"
+Get-ChildItem "$migrationDir\V*.sql" |
+  Sort-Object { [int]($_.Name -replace '^V(\d+)_.*$', '$1') } |
+  ForEach-Object {
+    psql -v ON_ERROR_STOP=1 -U postgres -d ecogreen -f $_.FullName
+    if ($LASTEXITCODE -ne 0) { throw "Migration thất bại: $($_.Name)" }
+  }
 ```
 
-Manual smoke test: `curl -i http://localhost:8081/api/v1/products` returns `200` with `{"data":[...],"meta":{...}}`; register a user, sign in,
-add a product to the cart, check out, and open the order in the order history. As an admin, open `/admin`.
+Nếu PostgreSQL yêu cầu mật khẩu, đặt `$env:PGPASSWORD` cho phiên PowerShell trước khi chạy `psql`, rồi xóa biến sau khi hoàn tất. Với database đã có dữ liệu, sao lưu trước khi áp dụng migration; một số migration thay đổi cấu trúc/trạng thái đơn hàng. Đặc biệt, chạy `seed-data.sql` sẽ xóa dữ liệu đơn hàng, thanh toán, sản phẩm và danh mục hiện có để nạp lại dữ liệu mẫu.
 
-## Common issues
+Danh sách migration hiện tại gồm các phiên bản `V2`–`V8`, `V10`–`V12`, `V20`–`V22`, `V30`–`V31`, `V40`–`V41`, `V50`–`V51`, `V60`, `V70`, `V80`, `V90`, `V91` và `V92`. Nên để script Compose áp dụng trên database rỗng hoặc dùng lệnh PowerShell phía trên để sắp xếp theo số phiên bản.
 
-- **Backend exits at startup mentioning the JWT secret** — `JWT_SECRET` is missing or shorter than 32 bytes.
-- **`Connection refused` or `password authentication failed`** — the backend uses port 5432 and the `application.properties`
-  password by default; with Docker set the `SPRING_DATASOURCE_*` variables (Database setup, step 3).
-- **`./mvnw: Permission denied`** — run `chmod +x backend/mvnw` or use `sh ./mvnw ...`.
-- **`npm ci` fails with "package.json and package-lock.json are not in sync"** — use `npm install`.
-- **Vite fails to start with a Node engine error** — upgrade to Node 20.19+ or 22.12+.
-- **Google button is disabled, or Google sign-in answers 503** — set `VITE_GOOGLE_CLIENT_ID` in `frontend/.env` (and rebuild/restart
-  Vite) and `GOOGLE_CLIENT_ID` for the backend, using the same Web client ID.
-- **Roles look wrong or the admin menu is missing** — make sure migrations `V4`–`V6` (and `V41` for the discount permissions) were applied and that the user has the
-  `ADMIN` role, then sign in again.
-- **HTTP 429 on sign-in** — five failed attempts per username and IP lock sign-in for 15 minutes.
-- **The storefront is empty** — there are no products yet; add them as admin or load `database/seed-data.sql` on a disposable DB.
+`spring.jpa.hibernate.ddl-auto=update` giúp Hibernate cập nhật một phần cấu trúc entity trong quá trình phát triển; thiết lập này **không thay thế** các migration SQL chứa dữ liệu khởi tạo quyền và các thay đổi nghiệp vụ.
 
-## Development notes
+### Database Docker đã được khởi tạo trước đó
 
-- Every endpoint under `/api/v1` follows the new API convention (`{ data, meta }` success, `{ error }` failure). Only the five
-  legacy `/api/admin` endpoints return plain JSON. The rules for API changes are in [`CLAUDE.md`](./CLAUDE.md).
-- Permission codes live in one class, `security/Permissions.java`. Roles and their permissions are stored in the database.
-- Hibernate runs with `ddl-auto=update` in development, so the entities and the SQL files must be kept consistent.
-- Reference: [`API.md`](./API.md) (endpoints), [`DATABASE.md`](./DATABASE.md) (tables), `docs/ai/contracts/` (one contract per module).
+Các script trong `docker/postgres-init/` chỉ chạy tự động khi PostgreSQL tạo data directory lần đầu. Nếu cần áp dụng migration mới cho volume đang tồn tại, hãy sao lưu và chạy migration đó thủ công bằng `psql`; không xóa volume để ép khởi tạo lại nếu cần giữ dữ liệu.
 
-## Contributing
+## 4. Luồng nghiệp vụ
 
-1. Create a branch from `main` (`feature/<name>`, `fix/<name>` or `chore/<name>`); do not commit to `main` directly.
-2. Keep the change focused, follow the conventions in [`CLAUDE.md`](./CLAUDE.md), and update the documentation your change
-   affects.
-3. Run the backend tests, `npm run lint` and `npm run build` before opening a pull request, and describe what you ran.
-4. Never commit secrets or a real `.env` file.
+1. **Duyệt và chọn sản phẩm:** khách tìm kiếm, lọc theo danh mục/giá/tình trạng tồn, sắp xếp và xem sản phẩm; các lượt xem, tìm kiếm và thao tác giỏ được ghi nhận thành analytics event. Backend kiểm tra trạng thái sản phẩm và số lượng tồn khi thao tác giỏ.
+2. **Đăng nhập và chuẩn bị đơn:** khách đăng nhập, chọn hoặc nhập địa chỉ giao hàng, áp dụng mã giảm giá nếu hợp lệ. Trang checkout yêu cầu đăng nhập.
+3. **Xem trước và đặt hàng:** backend tính lại giá, giảm giá, phí giao hàng và tổng tiền; không tin tổng tiền do trình duyệt gửi lên. Khi xác nhận, backend kiểm tra tồn trong transaction, tạo đơn với bản chụp giá/thông tin giao hàng, giữ chỗ tồn kho, ghi lịch sử trạng thái và tạo giao dịch thanh toán.
+4. **Thanh toán:** COD không cần chuyển cổng. VNPay chuyển khách tới cổng và chỉ xác nhận thanh toán khi callback phía server được xác minh. VietQR/MoMo hiện là QR tĩnh, nhân viên xác nhận thủ công. Mock payment chỉ dùng trong phát triển.
+5. **Hết hạn và xử lý đơn:** đơn chưa thanh toán quá 3 ngày được tự hủy; tồn giữ chỗ được giải phóng và các mặt hàng được cộng lại vào giỏ của khách. Thanh toán đến muộn không thể chuyển đơn đã hủy sang đã thanh toán.
+6. **Xử lý và giao đơn:** nhân viên có quyền cập nhật đơn qua các trạng thái hợp lệ; backend kiểm soát chuyển trạng thái, điều chỉnh tồn kho và ghi nhật ký thay đổi. Khách theo dõi tiến trình tại lịch sử/chi tiết đơn.
+7. **Đổi trả và hoàn tiền:** khách gửi yêu cầu đổi/trả cho đơn đã giao, chọn mặt hàng và cung cấp lý do/ảnh. Nhân viên yêu cầu bổ sung thông tin, chấp nhận hoặc từ chối, xác nhận hàng nhận lại và ghi nhận hoàn tiền. Hoàn tiền cổng thanh toán không tự động.
+8. **Thông báo:** sự kiện tài khoản, đơn hàng, thanh toán, giao hàng và đổi trả có thể tạo email bất đồng bộ khi SMTP được cấu hình; kết quả gửi được lưu trong nhật ký.
+
+## 5. Màn hình, route và phân quyền
+
+### Route cửa hàng
+
+| Route | Màn hình | Truy cập |
+|---|---|---|
+| `/` | Trang chủ / danh sách sản phẩm | Công khai |
+| `/product/:id` | Chi tiết sản phẩm (hỗ trợ id hoặc slug) | Công khai |
+| `/login` | Đăng nhập | Công khai |
+| `/register` | Đăng ký | Công khai |
+| `/forgot-password` | Yêu cầu đặt lại mật khẩu | Công khai |
+| `/reset-password` | Đặt mật khẩu mới | Công khai, cần token hợp lệ |
+| `/cart` | Giỏ hàng | Route công khai; thao tác giỏ gắn với tài khoản |
+| `/checkout` | Xác nhận thông tin và đặt hàng | Đăng nhập |
+| `/payment/:orderId` | Thanh toán đơn hàng | Đăng nhập; chỉ chủ đơn hoặc nhân viên có quyền phù hợp |
+| `/payment/return` | Nhận kết quả chuyển hướng từ cổng thanh toán | Đăng nhập |
+| `/order-success/:orderId` | Kết quả đặt hàng | Đăng nhập |
+| `/orders` | Lịch sử đơn hàng | Đăng nhập, dữ liệu của chính khách |
+| `/orders/:id` | Chi tiết đơn hàng / tiến trình / yêu cầu đổi trả | Đăng nhập, kiểm tra quyền sở hữu |
+| `/account/addresses` | Sổ địa chỉ | Đăng nhập |
+| `/account/profile` | Hồ sơ cá nhân | Đăng nhập |
+| `/faq` | Câu hỏi thường gặp | Công khai |
+| `/contact` | Liên hệ | Công khai |
+| `/policy/returns` | Chính sách đổi trả | Công khai |
+| `/terms` | Điều khoản sử dụng | Công khai |
+| `/privacy` | Chính sách quyền riêng tư | Công khai |
+
+### Khu vực quản trị
+
+Route quản trị là `/admin/*`. Đây là một giao diện gồm các tab chuyển đổi trong trang, **không phải các URL riêng cho từng tab**.
+
+| Tab quản trị | Quyền để hiển thị tab | Quyền chính cho thao tác |
+|---|---|---|
+| Tổng quan | Tài khoản nhân viên (`ADMIN` hoặc `MANAGER`) | Các thẻ/báo cáo được lọc theo quyền. Biểu đồ doanh thu legacy chỉ `ADMIN`. |
+| Sản phẩm | `product:view` | Tạo `product:create`; sửa/ảnh `product:update`; xóa `product:delete`; đăng bán `product:publish`. |
+| Danh mục | Bất kỳ quyền `category:view/create/update/delete` | Quyền tương ứng với xem, tạo, sửa và xóa. |
+| Kho hàng | `inventory:view` | Điều chỉnh tồn cần `inventory:adjust`. |
+| Đơn hàng | `order:view_all` | Cập nhật trạng thái `order:update` (hủy theo `order:cancel`); xem/xác nhận thanh toán và hoàn tiền cần quyền `payment:*` tương ứng. |
+| Đổi / Trả hàng | `return:view` | Xử lý yêu cầu cần `return:process`. |
+| Khách hàng | `user:view` | Cập nhật vai trò `user:update`; khóa/mở khóa/xóa `user:disable`. Một số thao tác gán/gỡ ADMIN chỉ ADMIN được phép. |
+| Mã giảm giá | `discount:view` | Tạo/sửa/xóa `discount:manage`. |
+| Thông báo | `analytics:view` | Xem nhật ký thông báo theo API quản trị. |
+| API nhật ký kiểm toán (`/api/v1/admin/audit-logs`) | `audit:view` | Xem thao tác quản trị và thay đổi trạng thái đơn; hiện chưa có tab giao diện riêng. |
+
+### Vai trò
+
+- **CUSTOMER:** thao tác trên tài khoản và dữ liệu của chính mình; không có quyền quản trị theo permission.
+- **MANAGER:** có 26 permission quản trị, bao gồm các chức năng vận hành; không có `system:configure`, `audit:view`, `user:disable`. Không thể cấp/gỡ vai trò `ADMIN`.
+- **ADMIN:** có toàn bộ 29 permission và được truy cập các báo cáo doanh thu legacy chỉ dành cho ADMIN.
+
+Việc ẩn tab/nút ở frontend chỉ phục vụ giao diện. Backend xác thực token, quyền trên từng API và quyền sở hữu đơn hàng; không dựa vào việc frontend đã ẩn route hay nút.
+
+## 6. Cấu trúc thư mục
+
+```text
+.
+├── backend/
+│   ├── src/main/java/com/example/backend/
+│   │   ├── api/             # Định dạng phản hồi API
+│   │   ├── config/          # Cấu hình Spring
+│   │   ├── controller/      # REST controllers
+│   │   ├── dto/             # Request/response DTO
+│   │   ├── entity/          # JPA entities
+│   │   ├── event/           # Sự kiện nghiệp vụ
+│   │   ├── exception/       # Xử lý lỗi
+│   │   ├── repository/      # Truy cập dữ liệu
+│   │   ├── security/        # JWT, xác thực, permission
+│   │   ├── service/         # Nghiệp vụ
+│   │   └── storage/         # Lưu và kiểm tra file tải lên
+│   ├── src/main/resources/
+│   │   ├── application.properties
+│   │   └── db/migration/    # SQL migration áp dụng thủ công / qua init Docker
+│   ├── src/test/            # Kiểm thử backend
+│   ├── Dockerfile
+│   └── mvnw.cmd             # Maven wrapper cho Windows
+├── frontend/
+│   ├── src/
+│   │   ├── components/      # Thành phần giao diện dùng chung
+│   │   ├── context/         # AuthContext, CartContext
+│   │   ├── hooks/           # React hooks
+│   │   ├── pages/           # Các màn hình cửa hàng
+│   │   │   └── admin/
+│   │   │       └── tabs/    # Các tab quản trị
+│   │   ├── services/        # Gọi API
+│   │   └── utils/           # Hằng số và hàm hỗ trợ
+│   ├── public/              # Tài nguyên tĩnh
+│   ├── Dockerfile
+│   ├── nginx.conf
+│   └── package.json
+├── database/
+│   ├── init-postgres.sql    # Schema ban đầu
+│   └── seed-data.sql        # Dữ liệu demo (có thao tác xóa dữ liệu cũ)
+├── docker/
+│   └── postgres-init/       # Script khởi tạo DB lần đầu của Docker
+├── docs/
+│   └── ai/
+│       ├── EcoGreen_Project_Requirements.md
+│       └── EcoGreen_Project_Requirements.docx  # Bản gốc
+├── docker-compose.yml       # Khởi chạy PostgreSQL, backend và frontend
+└── .env.example             # Mẫu biến môi trường; tạo .env riêng để chạy
+```
+
+**Tài liệu requirements:** [`docs/ai/EcoGreen_Project_Requirements.md`](docs/ai/EcoGreen_Project_Requirements.md) (bản Markdown); bản Word gốc vẫn được giữ tại [`docs/ai/EcoGreen_Project_Requirements.docx`](docs/ai/EcoGreen_Project_Requirements.docx).

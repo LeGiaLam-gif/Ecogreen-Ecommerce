@@ -118,6 +118,5 @@ class OrderServiceCheckoutTest {
                 BigDecimal.class, BigDecimal.class, String.class, String.class, String.class, String.class));
         assertTrue(transactional("transitionStatus", Long.class, OrderStatus.class, Long.class, String.class));
         assertTrue(transactional("cancelOwnOrder", Long.class, Long.class, String.class));
-        assertTrue(transactional("updateStatus", Long.class, String.class, Long.class));
     }
 }

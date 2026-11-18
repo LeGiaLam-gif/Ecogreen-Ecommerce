@@ -1,8 +1,7 @@
 package com.example.backend.entity;
 
 import jakarta.persistence.*;
-import org.hibernate.annotations.JdbcTypeCode;
-import org.hibernate.type.SqlTypes;
+import org.hibernate.annotations.ColumnTransformer;
 
 import java.time.LocalDateTime;
 
@@ -32,7 +31,7 @@ public class AnalyticsEvent {
     @Column(name = "session_id", length = 100)
     private String sessionId;
 
-    @JdbcTypeCode(SqlTypes.JSON)
+    @ColumnTransformer(write = "?::jsonb")
     @Column(name = "payload", columnDefinition = "jsonb")
     private String payload;
 

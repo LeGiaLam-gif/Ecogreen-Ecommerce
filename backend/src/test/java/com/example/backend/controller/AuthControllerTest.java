@@ -13,6 +13,7 @@ import com.example.backend.exception.GoogleLoginUnavailableException;
 import com.example.backend.exception.UnauthorizedException;
 import com.example.backend.repository.UserRepository;
 import com.example.backend.security.AuthGuard;
+import com.example.backend.security.AuthCookies;
 import com.example.backend.security.AuthInterceptor;
 import com.example.backend.security.JwtService;
 import com.example.backend.security.LoginThrottle;
@@ -54,6 +55,7 @@ class AuthControllerTest {
     private PasswordResetService passwordResetService;
     private UserRepository userRepository;
     private JwtService jwt;
+    private AuthCookies authCookies;
     private MockMvc mvc;
 
     private static User user() {
@@ -71,6 +73,7 @@ class AuthControllerTest {
         passwordResetService = mock(PasswordResetService.class);
         userRepository = mock(UserRepository.class);
         jwt = new JwtService(TestJwt.SECRET, 900);
+        authCookies = new AuthCookies(false, 900, 14);
 
         AuthGuard guard = new AuthGuard();
         ReflectionTestUtils.setField(guard, "userRepository", userRepository);
@@ -78,10 +81,11 @@ class AuthControllerTest {
         ReflectionTestUtils.setField(controller, "authService", authService);
         ReflectionTestUtils.setField(controller, "passwordResetService", passwordResetService);
         ReflectionTestUtils.setField(controller, "authGuard", guard);
+        ReflectionTestUtils.setField(controller, "authCookies", authCookies);
 
         mvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler())
-                .addInterceptors(new AuthInterceptor(jwt, userRepository))
+                .addInterceptors(new AuthInterceptor(jwt, userRepository, authCookies))
                 .build();
     }
 
@@ -91,7 +95,7 @@ class AuthControllerTest {
     }
 
     @Test
-    void login_returnsEnvelopeWithTokensAndUser() throws Exception {
+    void login_setsHttpOnlyCookiesAndReturnsOnlyUserProfile() throws Exception {
         UserResponse ur = UserResponse.from(user());
         when(authService.login(eq("alice"), eq("pw"), anyString()))
                 .thenReturn(new AuthResponse("acc", "ref", 900, ur));
@@ -99,15 +103,22 @@ class AuthControllerTest {
         MvcResult result = mvc.perform(post("/api/v1/auth/login").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"username\":\"alice\",\"password\":\"pw\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.accessToken").value("acc"))
-                .andExpect(jsonPath("$.data.refreshToken").value("ref"))
-                .andExpect(jsonPath("$.data.expiresIn").value(900))
-                .andExpect(jsonPath("$.data.user.username").value("alice"))
-                .andExpect(jsonPath("$.data.user.roles[0]").value("CUSTOMER"))
-                .andExpect(jsonPath("$.data.user.permissions").isArray())
+                .andExpect(jsonPath("$.data.username").value("alice"))
+                .andExpect(jsonPath("$.data.roles[0]").value("CUSTOMER"))
+                .andExpect(jsonPath("$.data.permissions").isArray())
+                .andExpect(jsonPath("$.data.accessToken").doesNotExist())
+                .andExpect(jsonPath("$.data.refreshToken").doesNotExist())
+                .andExpect(header().stringValues("Set-Cookie",
+                        org.hamcrest.Matchers.hasItems(
+                                org.hamcrest.Matchers.containsString("ecogreen_access=acc;"),
+                                org.hamcrest.Matchers.containsString("ecogreen_refresh=ref;"))))
                 .andReturn();
         assertTrue(result.getResponse().getContentAsString().contains("\"meta\":null"));
         assertTrue(!result.getResponse().getContentAsString().contains("password"));
+        assertTrue(result.getResponse().getHeaders("Set-Cookie").stream()
+                .filter(value -> value.startsWith("ecogreen_access="))
+                .allMatch(value -> value.contains("HttpOnly") && value.contains("SameSite=Lax")
+                        && value.contains("Max-Age=900") && !value.contains("Secure")));
     }
 
     @Test
@@ -154,7 +165,8 @@ class AuthControllerTest {
         when(authService.loginWithGoogle(any())).thenReturn(new AuthResponse("acc", "ref", 900, UserResponse.from(user())));
         mvc.perform(post("/api/v1/auth/google").contentType(MediaType.APPLICATION_JSON).content("{\"idToken\":\"x.y.z\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.accessToken").value("acc"));
+                .andExpect(jsonPath("$.data.accessToken").doesNotExist())
+                .andExpect(jsonPath("$.data.username").value("alice"));
 
         when(authService.loginWithGoogle(any())).thenThrow(new GoogleLoginUnavailableException("not configured"));
         mvc.perform(post("/api/v1/auth/google").contentType(MediaType.APPLICATION_JSON).content("{\"idToken\":\"x.y.z\"}"))
@@ -163,24 +175,60 @@ class AuthControllerTest {
     }
 
     @Test
-    void refresh_returnsTokenPairEnvelope_andInvalidTokenIs401() throws Exception {
+    void refresh_rotatesCookieWithoutReturningTokens_andInvalidTokenIs401() throws Exception {
         when(authService.refresh("good")).thenReturn(new TokenPairResponse("acc2", "ref2", 900));
-        mvc.perform(post("/api/v1/auth/refresh").contentType(MediaType.APPLICATION_JSON).content("{\"refreshToken\":\"good\"}"))
+        mvc.perform(post("/api/v1/auth/refresh")
+                        .cookie(new jakarta.servlet.http.Cookie(AuthCookies.REFRESH, "good"),
+                                new jakarta.servlet.http.Cookie(AuthCookies.CSRF, "csrf-value"))
+                        .header(AuthCookies.CSRF_HEADER, "csrf-value"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.accessToken").value("acc2"))
-                .andExpect(jsonPath("$.data.refreshToken").value("ref2"))
-                .andExpect(jsonPath("$.data.user").doesNotExist());
+                .andExpect(jsonPath("$.data").isEmpty())
+                .andExpect(jsonPath("$.data.accessToken").doesNotExist())
+                .andExpect(header().stringValues("Set-Cookie",
+                        org.hamcrest.Matchers.hasItems(
+                                org.hamcrest.Matchers.containsString("ecogreen_access=acc2;"),
+                                org.hamcrest.Matchers.containsString("ecogreen_refresh=ref2;"))));
 
         when(authService.refresh("revoked")).thenThrow(new UnauthorizedException("Phiên đăng nhập không hợp lệ."));
-        mvc.perform(post("/api/v1/auth/refresh").contentType(MediaType.APPLICATION_JSON).content("{\"refreshToken\":\"revoked\"}"))
+        mvc.perform(post("/api/v1/auth/refresh")
+                        .cookie(new jakarta.servlet.http.Cookie(AuthCookies.REFRESH, "revoked"),
+                                new jakarta.servlet.http.Cookie(AuthCookies.CSRF, "csrf-value"))
+                        .header(AuthCookies.CSRF_HEADER, "csrf-value"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"));
     }
 
     @Test
+    void stateChangingCookieRequestWithoutCsrfTokenIsForbidden() throws Exception {
+        mvc.perform(post("/api/v1/auth/refresh")
+                        .cookie(new jakarta.servlet.http.Cookie(AuthCookies.REFRESH, "good")))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error.code").value("FORBIDDEN"));
+    }
+
+    @Test
+    void rememberMeOffUsesSessionCookies() throws Exception {
+        when(authService.login(eq("alice"), eq("pw"), anyString()))
+                .thenReturn(new AuthResponse("acc", "ref", 900, UserResponse.from(user())));
+
+        MvcResult result = mvc.perform(post("/api/v1/auth/login")
+                        .header("X-Remember-Me", "false")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"alice\",\"password\":\"pw\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        assertTrue(result.getResponse().getHeaders("Set-Cookie").stream()
+                .filter(value -> value.startsWith("ecogreen_"))
+                .allMatch(value -> !value.contains("Max-Age")));
+    }
+
+    @Test
     void logout_revokesToken_andReturnsNullData() throws Exception {
-        MvcResult result = mvc.perform(post("/api/v1/auth/logout").contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"refreshToken\":\"raw\"}"))
+        MvcResult result = mvc.perform(post("/api/v1/auth/logout")
+                        .cookie(new jakarta.servlet.http.Cookie(AuthCookies.REFRESH, "raw"),
+                                new jakarta.servlet.http.Cookie(AuthCookies.CSRF, "csrf-value"))
+                        .header(AuthCookies.CSRF_HEADER, "csrf-value"))
                 .andExpect(status().isOk())
                 .andReturn();
 
@@ -202,13 +250,13 @@ class AuthControllerTest {
         when(userRepository.existsByIdAndActiveTrue(3L)).thenReturn(true);
         when(userRepository.findById(3L)).thenReturn(Optional.of(u));
 
-        mvc.perform(get("/api/v1/auth/me").header("Authorization", "Bearer " + token))
+        mvc.perform(get("/api/v1/auth/me").cookie(new jakarta.servlet.http.Cookie(AuthCookies.ACCESS, token)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.id").value(3))
                 .andExpect(jsonPath("$.data.username").value("alice"));
 
         when(userRepository.existsByIdAndActiveTrue(3L)).thenReturn(false); // account deactivated meanwhile
-        mvc.perform(get("/api/v1/auth/me").header("Authorization", "Bearer " + token))
+        mvc.perform(get("/api/v1/auth/me").cookie(new jakarta.servlet.http.Cookie(AuthCookies.ACCESS, token)))
                 .andExpect(status().isUnauthorized());
     }
 
@@ -279,8 +327,8 @@ class AuthControllerTest {
                 .thenReturn(new AuthResponse("acc", "ref", 900, UserResponse.from(user())));
         mvc.perform(post("/api/v1/auth/facebook").contentType(MediaType.APPLICATION_JSON).content("{\"accessToken\":\"fb-token\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.accessToken").value("acc"))
-                .andExpect(jsonPath("$.data.user.username").value("alice"));
+                .andExpect(jsonPath("$.data.accessToken").doesNotExist())
+                .andExpect(jsonPath("$.data.username").value("alice"));
 
         when(authService.loginWithFacebook(any(FacebookAuthRequest.class)))
                 .thenThrow(new FacebookLoginUnavailableException("Đăng nhập bằng Facebook hiện chưa được cấu hình."));

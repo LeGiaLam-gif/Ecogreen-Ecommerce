@@ -26,7 +26,7 @@ import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import org.springframework.test.web.servlet.request.AbstractMockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.math.BigDecimal;
@@ -127,12 +127,12 @@ class CatalogControllersSecurityTest {
         return l;
     }
 
-    private static MockHttpServletRequestBuilder as(MockHttpServletRequestBuilder b, List<String> permissions) {
+    private static AbstractMockHttpServletRequestBuilder<?> as(AbstractMockHttpServletRequestBuilder<?> b, List<String> permissions) {
         return b.requestAttr(AuthInterceptor.REQUEST_ATTR, userWith(permissions));
     }
 
     /** One entry per permission-sensitive endpoint: how to call it, and the single permission it requires. */
-    private record Endpoint(String name, Supplier<MockHttpServletRequestBuilder> request, String permission) {
+    private record Endpoint(String name, Supplier<AbstractMockHttpServletRequestBuilder<?>> request, String permission) {
     }
 
     private List<Endpoint> endpoints() {

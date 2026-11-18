@@ -2,8 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import * as authApi from '../services/authApi';
 import {
   clearSession,
-  getAccessToken,
-  getRefreshToken,
+  hasSessionHint,
   getStoredUser,
   purgeLegacySession,
   saveSession,
@@ -22,44 +21,40 @@ export const useAuth = () => {
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(() => {
-    purgeLegacySession(); // old UUID sessions are cleared silently => treated as logged out
-    return getAccessToken() || getRefreshToken() ? getStoredUser() : null;
+    purgeLegacySession();
+    return hasSessionHint() ? getStoredUser() : null;
   });
   const [loading, setLoading] = useState(false);
 
-  // On reload, ALWAYS re-validate a stored session against the backend (B01-P3), so stale cached roles/permissions
-  // (e.g. a pre-CUSTOMER 'USER' role or changed permissions) are replaced by server truth. http.js refreshes an expired
-  // access token once. If the session was cleared (refresh rejected) or there was no cached user, drop it; a transient
-  // network/5xx error keeps an already-cached session.
+  // Re-validate cached profile/permissions against the cookie-backed session on every reload.
   useEffect(() => {
-    if (getAccessToken() || getRefreshToken()) {
+    if (hasSessionHint()) {
       authApi
         .getMe()
         .then((me) => {
           setUser(me);
           saveUser(me);
         })
-        .catch(() => {
-          if (!user || (!getAccessToken() && !getRefreshToken())) {
+        .catch((error) => {
+          if (error?.response?.status === 401) {
             clearSession();
             setUser(null);
           }
         });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // `remember`: true -> the session survives closing the browser (localStorage); false -> this tab only (sessionStorage).
-  const startSession = (data, remember = true) => {
-    saveSession(data, remember);
-    setUser(data.user);
-    return data.user;
+  const startSession = (profile, remember = true) => {
+    saveSession({ user: profile }, remember);
+    setUser(profile);
+    return profile;
   };
 
   const login = async (username, password, remember = true) => {
     setLoading(true);
     try {
-      return startSession(await authApi.login(username, password), remember);
+      return startSession(await authApi.login(username, password, remember), remember);
     } finally {
       setLoading(false);
     }
@@ -68,7 +63,7 @@ export const AuthProvider = ({ children }) => {
   const loginWithGoogle = async (idToken, remember = true) => {
     setLoading(true);
     try {
-      return startSession(await authApi.loginWithGoogle(idToken), remember);
+      return startSession(await authApi.loginWithGoogle(idToken, remember), remember);
     } finally {
       setLoading(false);
     }
@@ -77,7 +72,7 @@ export const AuthProvider = ({ children }) => {
   const loginWithFacebook = async (accessToken, remember = true) => {
     setLoading(true);
     try {
-      return startSession(await authApi.loginWithFacebook(accessToken), remember);
+      return startSession(await authApi.loginWithFacebook(accessToken, remember), remember);
     } finally {
       setLoading(false);
     }
@@ -93,10 +88,15 @@ export const AuthProvider = ({ children }) => {
   };
 
   const logout = () => {
-    const refreshToken = getRefreshToken();
-    if (refreshToken) authApi.logout(refreshToken).catch(() => {});
+    authApi.logout().catch(() => {});
     clearSession();
     setUser(null);
+  };
+
+  const updateUserProfile = (profile) => {
+    const updatedUser = { ...user, ...profile };
+    saveUser(updatedUser);
+    setUser(updatedUser);
   };
 
   // B01-P3. Permissions/roles come from the server (login/me response); the frontend only uses them for UX - the backend
@@ -123,6 +123,7 @@ export const AuthProvider = ({ children }) => {
         loginWithGoogle,
         loginWithFacebook,
         register,
+        updateUserProfile,
         logout
       }}
     >

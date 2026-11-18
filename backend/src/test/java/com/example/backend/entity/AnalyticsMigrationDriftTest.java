@@ -4,8 +4,7 @@ import com.example.backend.service.AnalyticsEventTypes;
 import jakarta.persistence.Column;
 import jakarta.persistence.Index;
 import jakarta.persistence.Table;
-import org.hibernate.annotations.JdbcTypeCode;
-import org.hibernate.type.SqlTypes;
+import org.hibernate.annotations.ColumnTransformer;
 import org.junit.jupiter.api.Test;
 
 import java.io.InputStream;
@@ -96,7 +95,7 @@ class AnalyticsMigrationDriftTest {
         assertTrue(stmts.contains("VARCHAR(100)"));
 
         Field payload = AnalyticsEvent.class.getDeclaredField("payload");
-        assertEquals(SqlTypes.JSON, payload.getAnnotation(JdbcTypeCode.class).value(), "the entity maps payload as JSON (jsonb)");
+        assertEquals("?::jsonb", payload.getAnnotation(ColumnTransformer.class).write(), "the entity casts JSON text to jsonb");
         assertEquals("jsonb", payload.getAnnotation(Column.class).columnDefinition());
     }
 

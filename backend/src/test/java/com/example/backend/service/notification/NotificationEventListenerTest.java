@@ -11,6 +11,7 @@ import com.example.backend.event.OrderPlacedEvent;
 import com.example.backend.event.OrderStatusChangedEvent;
 import com.example.backend.event.ReturnCreatedEvent;
 import com.example.backend.event.ReturnStatusChangedEvent;
+import com.example.backend.event.UserRegisteredEvent;
 import com.example.backend.repository.NotificationRepository;
 import com.example.backend.repository.NotificationSourceRepository;
 import com.example.backend.repository.NotificationSourceRepository.OrderRow;
@@ -86,6 +87,13 @@ class NotificationEventListenerTest {
     }
 
     // ── orders ───────────────────────────────────────────────────────────────
+
+    @Test
+    void onUserRegistered_deliversAccountCreated() {
+        listener.onUserRegistered(new UserRegisteredEvent(9L));
+
+        deliveredContext(9L, NotificationType.ACCOUNT_CREATED, "user:9:CREATED");
+    }
 
     @Test
     void onOrderPlaced_deliversOrderCreated_withoutAnyLookup() {
@@ -255,7 +263,7 @@ class NotificationEventListenerTest {
                 .filter(m -> Modifier.isPublic(m.getModifiers()))
                 .toList();
 
-        assertEquals(5, handlers.size(), "one handler per consumed event");
+        assertEquals(6, handlers.size(), "one handler per consumed event");
         for (Method m : handlers) {
             TransactionalEventListener annotation = m.getAnnotation(TransactionalEventListener.class);
             assertNotNull(annotation, m.getName() + " must be a @TransactionalEventListener");

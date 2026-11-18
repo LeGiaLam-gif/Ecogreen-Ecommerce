@@ -8,12 +8,18 @@ import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.data.domain.Pageable;
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
 public interface OrderRepository extends JpaRepository<Order, Long>, JpaSpecificationExecutor<Order> {
+        @Query("SELECT o.id FROM Order o WHERE o.status = :status AND o.createdAt <= :cutoff ORDER BY o.createdAt, o.id")
+        List<Long> findExpiredOrderIds(@Param("status") OrderStatus status,
+                                       @Param("cutoff") LocalDateTime cutoff,
+                                       Pageable pageable);
+
         /**
          * Loads the order row with {@code SELECT ... FOR UPDATE}, so two concurrent transitions of the same order (double
          * click, webhook plus admin) run one after the other. Only OrderService.transitionStatus (and the owner-cancel

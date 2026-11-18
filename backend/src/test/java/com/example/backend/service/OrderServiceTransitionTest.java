@@ -14,11 +14,14 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
+import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static com.example.backend.entity.OrderStatus.*;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -145,6 +148,31 @@ class OrderServiceTransitionTest {
         orderWithOneItem(PENDING_PAYMENT);   // no payment row: the mock's findByOrderId answers Optional.empty()
 
         assertThrows(BusinessRuleViolationException.class, () -> f.service.transitionStatus(7L, PROCESSING, 99L, null));
+    }
+
+    @Test
+    void expirePendingOrder_cancelsAndReleasesReservedStock() {
+        Order order = orderWithOneItem(PENDING_PAYMENT);
+        LocalDateTime cutoff = LocalDateTime.now();
+        ReflectionTestUtils.setField(order, "createdAt", cutoff.minusSeconds(1));
+
+        assertTrue(f.service.cancelIfExpired(7L, cutoff));
+
+        assertEquals(CANCELLED, order.getStatus());
+        verify(f.inventory).release(10L, 2, "ORDER", 7L);
+    }
+
+    @Test
+    void expirePendingOrder_doesNotCancelBeforeCutoff() {
+        Order order = orderWithOneItem(PENDING_PAYMENT);
+        LocalDateTime cutoff = LocalDateTime.now();
+        ReflectionTestUtils.setField(order, "createdAt", cutoff.plusSeconds(1));
+
+        assertFalse(f.service.cancelIfExpired(7L, cutoff));
+
+        assertEquals(PENDING_PAYMENT, order.getStatus());
+        verifyNoStockMovement();
+        verifyNoInteractions(f.history, f.events);
     }
 
     // ---- validation ----

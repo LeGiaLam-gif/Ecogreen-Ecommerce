@@ -75,7 +75,7 @@ public class ProductService {
         Product p;
         if (key.matches("\\d{1,18}")) {
             p = productRepository.findById(Long.parseLong(key)).orElse(null);
-        } else if (key.matches("[a-z0-9]+(-[a-z0-9]+)*") && key.length() <= 180) {
+        } else if (!key.matches("\\d+") && key.matches("[a-z0-9]+(-[a-z0-9]+)*") && key.length() <= 180) {
             p = productRepository.findBySlug(key).orElse(null);
         } else {
             p = null;
