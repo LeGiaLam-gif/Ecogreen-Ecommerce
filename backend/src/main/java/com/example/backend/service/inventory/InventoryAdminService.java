@@ -86,6 +86,13 @@ public class InventoryAdminService {
         return get(productId);
     }
 
+    /** Sets available stock through {@link InventoryService#setAvailable} and returns the updated row. */
+    @Transactional
+    public InventoryRow setAvailable(Long productId, int targetAvailable, String reason, Long actorUserId) {
+        inventoryService.setAvailable(productId, targetAvailable, reason, actorUserId);
+        return get(productId);
+    }
+
     /** Lower-cased LIKE pattern with %, _ and the escape character escaped; "%" when there is no keyword. */
     static String likePattern(String keyword) {
         String trimmed = keyword == null ? "" : keyword.trim();

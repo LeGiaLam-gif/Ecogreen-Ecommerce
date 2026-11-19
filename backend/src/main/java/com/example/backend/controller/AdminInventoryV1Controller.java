@@ -4,6 +4,7 @@ import com.example.backend.api.ApiResponse;
 import com.example.backend.api.PageResponse;
 import com.example.backend.dto.InventoryAdjustRequest;
 import com.example.backend.dto.InventoryResponse;
+import com.example.backend.dto.InventorySetAvailableRequest;
 import com.example.backend.dto.InventoryTransactionResponse;
 import com.example.backend.security.AuthGuard;
 import com.example.backend.security.AuthInterceptor;
@@ -67,6 +68,15 @@ public class AdminInventoryV1Controller {
         authGuard.requirePermission(request, Permissions.INVENTORY_ADJUST);
         return ApiResponse.of(InventoryResponse.from(
                 inventoryAdminService.adjust(productId, body.quantityDelta(), body.reason(), actorId(request))));
+    }
+
+    @PutMapping("/{productId}")
+    public ApiResponse<InventoryResponse> setAvailable(@PathVariable Long productId,
+                                                       @Valid @RequestBody InventorySetAvailableRequest body,
+                                                       HttpServletRequest request) {
+        authGuard.requirePermission(request, Permissions.INVENTORY_UPDATE);
+        return ApiResponse.of(InventoryResponse.from(
+                inventoryAdminService.setAvailable(productId, body.available(), body.reason(), actorId(request))));
     }
 
     /** The authenticated admin's id for the ledger; read from the request attribute the interceptor already set. */

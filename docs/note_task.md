@@ -34,12 +34,12 @@ Các thay đổi bổ sung trong phiên hiện tại **đang nằm trong working
 
 ## Việc còn lại và giới hạn đã biết
 
-- **Kiểm thử tích hợp chưa chạy trên PostgreSQL thật:**
+- **Đã hoàn thành & xác minh thêm sau `a68cf85`:**
+  - Đã kiểm thử live `POST /v1/products/{id}/reviews` trên đơn hàng `DELIVERED` (`201`, trùng lặp `409`) và xác nhận đơn `CANCELLED` từ chối thanh toán đến muộn (`400`, giữ nguyên `CANCELLED`).
+  - Đã chuyển 5 endpoint legacy trong `AdminController` và `StatsController` sang `/api/v1/admin/reports/*` (`AdminReportV1Controller`, dùng `Permissions.ANALYTICS_VIEW` và `ApiResponse`), cập nhật `reportApi.js` + `OverviewTab.jsx` và xóa 2 controller legacy.
+  - Đã bổ sung endpoint sử dụng `Permissions.INVENTORY_UPDATE` (`PUT /api/v1/admin/inventory/{productId}`) và `Permissions.SYSTEM_CONFIGURE` (`GET /api/v1/admin/system/config`).
+- **Kiểm thử tích hợp chưa chạy trên Maven:**
   - 36 Postgres integration tests trong `backend/src/test` chưa được chạy với `ECOGREEN_TEST_PG_URL`.
-  - Chưa test live tình huống cạnh tranh giữa `PendingOrderExpiryProcessor` và callback thanh toán đến muộn, cũng như chưa test `POST /v1/products/{id}/reviews` trên một đơn hàng đã ở trạng thái `DELIVERED`.
-- **Legacy & phân quyền:**
-  - 5 endpoint legacy trong `AdminController` và `StatsController` (`/api/admin/stats`, `/api/admin/reports/*`) vẫn dùng `@Deprecated requireAdmin()` (chỉ `ADMIN`, trả JSON không theo envelope `/api/v1`).
-  - Quyền `system:configure` và `inventory:update` có trong `Permissions.java` nhưng chưa có endpoint sử dụng.
 - **Hạ tầng & tài liệu:**
   - Flyway chưa được kích hoạt (`ddl-auto=update` vẫn bật); migration vẫn áp dụng qua `docker/postgres-init/01-init.sh` (khi volume DB mới) hoặc chạy `psql` thủ công trên volume cũ.
   - Chưa có Spring Actuator (`/actuator/health`), CI/CD pipeline, và quy trình backup/restore tự động theo `docs/ai/EcoGreen_Project_Requirements.md`.

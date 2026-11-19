@@ -35,7 +35,7 @@ const AlertCard = ({ icon, tone, num, label, desc, title, onClick }) => (
  * state); `onBadges` reports the sidebar counters this tab just learnt.
  */
 const OverviewTab = ({ onNavigate, onBadges }) => {
-  const { user, isAdmin, hasPermission } = useAuth();
+  const { user, hasPermission } = useAuth();
   const canOrders = hasPermission(PERM.ORDER_VIEW_ALL);
   const canReturns = hasPermission(PERM.RETURN_VIEW);
   const canAnalytics = hasPermission(PERM.ANALYTICS_VIEW);
@@ -157,12 +157,12 @@ const OverviewTab = ({ onNavigate, onBadges }) => {
           </div>
         </div>
 
-        {/* Báo cáo doanh số: the revenue reports are still the legacy ADMIN-only endpoints (StatsController) */}
-        <div style={{ marginTop: '24px' }}>
-          {isAdmin
-            ? <SalesDashboard />
-            : <p className="admin-cell-muted">Biểu đồ doanh thu hiện chỉ dành cho tài khoản ADMIN.</p>}
-        </div>
+        {/* Báo cáo doanh số (B09: analytics:view) */}
+        {canAnalytics && (
+          <div style={{ marginTop: '24px' }}>
+            <SalesDashboard />
+          </div>
+        )}
 
         {/* Tần suất mua theo khách (B09): no names, the report carries ids only */}
         {customers !== null && (

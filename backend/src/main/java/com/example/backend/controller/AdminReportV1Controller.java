@@ -7,6 +7,9 @@ import com.example.backend.dto.LowStockItemResponse;
 import com.example.backend.dto.PendingOrdersResponse;
 import com.example.backend.dto.RefundSummaryResponse;
 import com.example.backend.entity.OrderStatus;
+import com.example.backend.repository.OrderRepository;
+import com.example.backend.repository.ProductRepository;
+import com.example.backend.repository.UserRepository;
 import com.example.backend.security.AuthGuard;
 import com.example.backend.security.Permissions;
 import com.example.backend.service.ReportService;
@@ -19,18 +22,21 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDate;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
- * The B09 admin reports on the new API convention. The legacy revenue reports stay in {@link StatsController}
- * ({@code /api/admin/reports}, requireAdmin, bare JSON) until B12 migrates them; a separate controller keeps the two
- * generations apart. Every endpoint needs {@code analytics:view}.
+ * B09 admin reports on the {@code /api/v1/admin/reports} convention. Every endpoint requires {@code analytics:view}.
  */
 @RestController
 @RequestMapping("/api/v1/admin/reports")
 public class AdminReportV1Controller {
 
     @Autowired private ReportService reportService;
+    @Autowired private UserRepository userRepository;
+    @Autowired private ProductRepository productRepository;
+    @Autowired private OrderRepository orderRepository;
     @Autowired private AuthGuard authGuard;
 
     /** Products whose available quantity is at or below {@code threshold} (default 10, 0..1,000,000), lowest first. */
@@ -72,5 +78,44 @@ public class AdminReportV1Controller {
         return PageResponse.of(
                 reportService.getCustomerPurchaseFrequency(ReportService.reportPageable(page, size)),
                 CustomerFrequencyResponse::from);
+    }
+
+    @GetMapping("/stats")
+    public ApiResponse<Map<String, Long>> stats(HttpServletRequest request) {
+        authGuard.requirePermission(request, Permissions.ANALYTICS_VIEW);
+        Map<String, Long> stats = new LinkedHashMap<>();
+        stats.put("totalUsers", userRepository.count());
+        stats.put("totalProducts", productRepository.count());
+        stats.put("totalOrders", orderRepository.count());
+        return ApiResponse.of(stats);
+    }
+
+    @GetMapping("/revenue-over-time")
+    public ApiResponse<List<Map<String, Object>>> revenueOverTime(@RequestParam(required = false) String range,
+                                                                  @RequestParam(required = false) String groupBy,
+                                                                  HttpServletRequest request) {
+        authGuard.requirePermission(request, Permissions.ANALYTICS_VIEW);
+        return ApiResponse.of(reportService.getRevenueOverTime(range, groupBy));
+    }
+
+    @GetMapping("/orders-by-status")
+    public ApiResponse<Map<String, Long>> ordersByStatus(HttpServletRequest request) {
+        authGuard.requirePermission(request, Permissions.ANALYTICS_VIEW);
+        return ApiResponse.of(reportService.getOrdersByStatus());
+    }
+
+    @GetMapping("/top-products")
+    public ApiResponse<List<Map<String, Object>>> topProducts(@RequestParam(required = false, defaultValue = "5") int limit,
+                                                              @RequestParam(required = false) String range,
+                                                              HttpServletRequest request) {
+        authGuard.requirePermission(request, Permissions.ANALYTICS_VIEW);
+        return ApiResponse.of(reportService.getTopProducts(limit, range));
+    }
+
+    @GetMapping("/summary")
+    public ApiResponse<Map<String, Object>> summary(@RequestParam(required = false) String range,
+                                                    HttpServletRequest request) {
+        authGuard.requirePermission(request, Permissions.ANALYTICS_VIEW);
+        return ApiResponse.of(reportService.getSummary(range));
     }
 }
