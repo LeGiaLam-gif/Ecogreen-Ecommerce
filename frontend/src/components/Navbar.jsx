@@ -128,6 +128,15 @@ const Navbar = ({ searchTerm, setSearchTerm }) => {
                   </Link>
 
                   <Link
+                    to="/account/notifications"
+                    className="dropdown-item"
+                    onClick={() => setDropdownOpen(false)}
+                  >
+                    <span className="item-icon">🔔</span>
+                    <span>Thông báo của tôi</span>
+                  </Link>
+
+                  <Link
                     to="/policy/returns"
                     className="dropdown-item"
                     onClick={() => setDropdownOpen(false)}

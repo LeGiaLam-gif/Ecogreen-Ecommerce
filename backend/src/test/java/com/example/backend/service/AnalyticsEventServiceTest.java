@@ -85,7 +85,7 @@ class AnalyticsEventServiceTest {
 
     @Test
     void track_unknownEventType_isIgnoredOrRejectedWithoutThrowing() {
-        assertDoesNotThrow(() -> service.track("product_view", 1L, null, map("productId", 3L)));
+        assertDoesNotThrow(() -> service.track("unknown_event", 1L, null, map("productId", 3L)));
         assertDoesNotThrow(() -> service.track("ORDER_CREATED", 1L, null, null));
         assertDoesNotThrow(() -> service.track(null, null, null, null));
         assertDoesNotThrow(() -> service.track("x'; DROP TABLE users;--", 1L, null, null));

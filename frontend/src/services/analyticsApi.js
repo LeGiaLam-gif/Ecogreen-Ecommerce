@@ -19,3 +19,7 @@ export const getRefundSummary = ({ from, to } = {}) =>
 // Orders per customer, revenue statuses only, most orders first: [{ userId, orderCount, totalSpent, firstOrderAt, lastOrderAt }].
 export const getCustomerFrequency = ({ page = 0, size = 20 } = {}) =>
   http.get('/v1/admin/reports/customer-frequency', { params: { page, size } }).then((res) => res.data);
+
+// Recorded analytics events, newest first: [{ id, eventType, userId, sessionId, payload, createdAt }].
+export const listAnalyticsEvents = ({ type, from, to, page = 0, size = 20, sort } = {}, config = {}) =>
+  http.get('/v1/admin/analytics/events', { ...config, params: { type, from, to, page, size, sort } }).then((res) => res.data);

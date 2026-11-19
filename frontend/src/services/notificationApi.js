@@ -6,3 +6,7 @@ import http from './http';
 // The server returns no message body and no email address.
 export const listAdminNotifications = ({ status, page = 0, size = 20, sort } = {}, config = {}) =>
   http.get('/v1/admin/notifications', { ...config, params: { status, page, size, sort } }).then((res) => res.data);
+
+// Caller's own notifications, /api/v1/users/me/notifications (ownership-based, any logged-in user).
+export const listMyNotifications = ({ page = 0, size = 20, sort } = {}, config = {}) =>
+  http.get('/v1/users/me/notifications', { ...config, params: { page, size, sort } }).then((res) => res.data);

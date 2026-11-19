@@ -24,6 +24,7 @@ export const PERM = {
   USER_UPDATE: 'user:update',
   USER_DISABLE: 'user:disable',
   ANALYTICS_VIEW: 'analytics:view',
+  AUDIT_VIEW: 'audit:view',
   DISCOUNT_VIEW: 'discount:view',
   DISCOUNT_MANAGE: 'discount:manage',
 };

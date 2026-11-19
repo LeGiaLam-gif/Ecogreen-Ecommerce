@@ -9,9 +9,10 @@ const USER_PAGE_SIZE = 20;
 
 /** "Khách hàng" tab (B08). `initialUserId` opens that account's detail straight away (from the dashboard). */
 const UsersTab = ({ initialUserId = null }) => {
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
   const { can } = usePermissions();
   const canDisable = can(PERM.USER_DISABLE); // lock / unlock and delete are both user:disable on the server
+  const canUpdateRoles = can(PERM.USER_UPDATE);
   const [detailId, setDetailId] = useState(initialUserId);
   const [errorMsg, setErrorMsg] = useState('');
   const [users, setUsers] = useState([]);
@@ -197,6 +198,9 @@ const UsersTab = ({ initialUserId = null }) => {
         <UserDetailModal
           userId={detailId}
           onClose={() => setDetailId(null)}
+          canEditRoles={canUpdateRoles && detailId !== user?.id}
+          isCallerAdmin={isAdmin}
+          onRolesUpdated={reloadUsers}
           onToggle={canDisable && detailId !== user?.id
             ? async (u) => { await handleToggleUser(u); setDetailId(null); }
             : null}

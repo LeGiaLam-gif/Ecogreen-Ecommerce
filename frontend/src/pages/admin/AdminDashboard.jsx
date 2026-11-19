@@ -10,6 +10,8 @@ import UsersTab from './tabs/UsersTab';
 import InventoryTab from './tabs/InventoryTab';
 import DiscountsTab from './tabs/DiscountsTab';
 import NotificationsTab from './tabs/NotificationsTab';
+import AnalyticsEventsTab from './tabs/AnalyticsEventsTab';
+import AuditLogsTab from './tabs/AuditLogsTab';
 import { PERM } from '../../utils/permissions';
 import './AdminDashboard.css';
 
@@ -26,6 +28,8 @@ const TABS = [
   { id: 'users', label: '👥 Khách hàng', title: '👥 Quản lý Khách hàng & Tài khoản', perms: [PERM.USER_VIEW] },
   { id: 'discounts', label: '🎟️ Mã giảm giá', title: '🎟️ Quản lý Mã giảm giá', perms: [PERM.DISCOUNT_VIEW] },
   { id: 'notifications', label: '✉️ Thông báo', title: '✉️ Nhật ký gửi Thông báo', perms: [PERM.ANALYTICS_VIEW] },
+  { id: 'analytics-events', label: '📈 Sự kiện Analytics', title: '📈 Sự kiện Analytics (Events)', perms: [PERM.ANALYTICS_VIEW] },
+  { id: 'audit-logs', label: '🛡️ Nhật ký thao tác', title: '🛡️ Nhật ký kiểm toán (Audit Logs)', perms: [PERM.AUDIT_VIEW] },
 ];
 
 /**
@@ -114,6 +118,8 @@ const AdminDashboard = () => {
           {activeTab === 'users' && <UsersTab key={tabParams.userId || 'all'} initialUserId={tabParams.userId} />}
           {activeTab === 'discounts' && <DiscountsTab />}
           {activeTab === 'notifications' && <NotificationsTab />}
+          {activeTab === 'analytics-events' && <AnalyticsEventsTab />}
+          {activeTab === 'audit-logs' && <AuditLogsTab />}
         </div>
       </main>
     </div>

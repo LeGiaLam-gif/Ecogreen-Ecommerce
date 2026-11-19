@@ -1,25 +1,37 @@
 import React, { useEffect, useState } from 'react';
-import { getAdminUser, getAdminUserOrders } from '../../../services/userApi';
+import { getAdminUser, getAdminUserOrders, setUserRoles } from '../../../services/userApi';
 import { orderStatusInfo } from '../../../utils/orderStatus';
 import AdminPagination from '../AdminPagination';
 
+const ALL_ROLES = ['CUSTOMER', 'MANAGER', 'ADMIN'];
 const ORDER_PAGE_SIZE = 10;
 const formatDate = (v) => (v ? new Date(v).toLocaleString('vi-VN') : '—');
 
 /**
  * Customer detail (B08): account data, the two counters and the order history, paged by the server. Needs user:view.
  * `onToggle` (lock / unlock) is passed only to users who hold user:disable and only for accounts other than their own.
+ * `canEditRoles` is passed when caller holds user:update and target is not themselves.
  */
-const UserDetailModal = ({ userId, onClose, onToggle }) => {
+const UserDetailModal = ({ userId, onClose, onToggle, canEditRoles = false, isCallerAdmin = false, onRolesUpdated }) => {
   const [user, setUser] = useState(null);
   const [orders, setOrders] = useState(null);
   const [orderPage, setOrderPage] = useState(0);
+  const [selectedRoles, setSelectedRoles] = useState([]);
+  const [savingRoles, setSavingRoles] = useState(false);
+  const [roleMsg, setRoleMsg] = useState('');
   const [error, setError] = useState('');
 
   useEffect(() => {
     let cancelled = false;
     getAdminUser(userId)
-      .then((u) => { if (!cancelled) { setUser(u); setError(''); } })
+      .then((u) => {
+        if (!cancelled) {
+          setUser(u);
+          setSelectedRoles(u.roles || []);
+          setRoleMsg('');
+          setError('');
+        }
+      })
       .catch((e) => { if (!cancelled) setError(e.friendlyMessage || 'Không thể tải thông tin người dùng.'); });
     return () => { cancelled = true; };
   }, [userId]);
@@ -31,6 +43,32 @@ const UserDetailModal = ({ userId, onClose, onToggle }) => {
       .catch((e) => { if (!cancelled) setError(e.friendlyMessage || 'Không thể tải lịch sử đơn hàng.'); });
     return () => { cancelled = true; };
   }, [userId, orderPage]);
+
+  const toggleRole = (role) => {
+    setRoleMsg('');
+    setSelectedRoles((prev) => (prev.includes(role) ? prev.filter((r) => r !== role) : [...prev, role]));
+  };
+
+  const handleSaveRoles = async () => {
+    if (selectedRoles.length === 0) {
+      setError('Phải chọn ít nhất một vai trò.');
+      return;
+    }
+    setSavingRoles(true);
+    setError('');
+    setRoleMsg('');
+    try {
+      const updated = await setUserRoles(user.id, selectedRoles);
+      setUser(updated);
+      setSelectedRoles(updated.roles || []);
+      setRoleMsg('Đã cập nhật vai trò.');
+      onRolesUpdated?.();
+    } catch (e) {
+      setError(e.friendlyMessage || 'Không thể cập nhật vai trò.');
+    } finally {
+      setSavingRoles(false);
+    }
+  };
 
   return (
     <div className="admin-modal-overlay">
@@ -54,6 +92,31 @@ const UserDetailModal = ({ userId, onClose, onToggle }) => {
                 <strong>{user.orderCount ?? 0}</strong> / <strong>{user.returnRequestCount ?? 0}</strong>
               </div>
             </div>
+            {canEditRoles && (
+              <div style={{ marginBottom: '14px', padding: '10px 12px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                <div style={{ fontWeight: 600, marginBottom: '8px', fontSize: '0.9rem' }}>Phân quyền vai trò</div>
+                <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
+                  {ALL_ROLES.map((role) => {
+                    const disabled = role === 'ADMIN' && !isCallerAdmin;
+                    return (
+                      <label key={role} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.55 : 1 }}>
+                        <input
+                          type="checkbox"
+                          checked={selectedRoles.includes(role)}
+                          disabled={disabled || savingRoles}
+                          onChange={() => toggleRole(role)}
+                        />
+                        <span>{role}</span>
+                      </label>
+                    );
+                  })}
+                  <button type="button" onClick={handleSaveRoles} disabled={savingRoles} className="admin-btn-action-edit">
+                    {savingRoles ? 'Đang lưu...' : 'Lưu vai trò'}
+                  </button>
+                </div>
+                {roleMsg && <div style={{ color: '#15803d', fontSize: '0.85rem', marginTop: '6px' }}>{roleMsg}</div>}
+              </div>
+            )}
             {onToggle && (
               <div style={{ marginBottom: '14px' }}>
                 <button type="button" onClick={() => onToggle(user)} className="admin-btn-action-edit">

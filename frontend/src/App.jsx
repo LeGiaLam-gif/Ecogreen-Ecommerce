@@ -21,6 +21,7 @@ import Orders from './pages/Orders';
 import OrderDetail from './pages/OrderDetail';
 import Addresses from './pages/Addresses';
 import CustomerProfile from './pages/CustomerProfile';
+import MyNotifications from './pages/MyNotifications';
 import FAQ from './pages/FAQ';
 import ContactUs from './pages/ContactUs';
 import ReturnPolicy from './pages/ReturnPolicy';
@@ -68,6 +69,7 @@ function AppContent() {
           <Route path="/orders/:id" element={<ProtectedRoute><OrderDetail /></ProtectedRoute>} />
           <Route path="/account/addresses" element={<ProtectedRoute><Addresses /></ProtectedRoute>} />
           <Route path="/account/profile" element={<ProtectedRoute><CustomerProfile /></ProtectedRoute>} />
+          <Route path="/account/notifications" element={<ProtectedRoute><MyNotifications /></ProtectedRoute>} />
 
           {/* Admin CMS - ADMIN or MANAGER (UX only); every API call is re-checked against the permissions server-side. */}
           <Route
