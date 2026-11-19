@@ -169,7 +169,17 @@ Nếu PostgreSQL yêu cầu mật khẩu, đặt `$env:PGPASSWORD` cho phiên Po
 
 Danh sách migration hiện tại gồm các phiên bản `V2`–`V8`, `V10`–`V12`, `V20`–`V22`, `V30`–`V31`, `V40`–`V41`, `V50`–`V51`, `V60`, `V70`, `V80`, `V90`, `V91` và `V92`. Nên để script Compose áp dụng trên database rỗng hoặc dùng lệnh PowerShell phía trên để sắp xếp theo số phiên bản.
 
-`spring.jpa.hibernate.ddl-auto=update` giúp Hibernate cập nhật một phần cấu trúc entity trong quá trình phát triển; thiết lập này **không thay thế** các migration SQL chứa dữ liệu khởi tạo quyền và các thay đổi nghiệp vụ.
+`spring.jpa.hibernate.ddl-auto=validate` và **Flyway** (`spring.flyway.out-of-order=true`, `baseline-on-migrate=true`) tự động áp dụng `V1__baseline.sql` cùng các migration `V2`–`V92` khi backend khởi động và kiểm tra khớp schema với entity.
+
+### Backup & Restore Database (Docker)
+
+```powershell
+# Sao lưu toàn bộ database ecogreen ra thư mục backups/
+.\docker\db-backup.ps1
+
+# Phục hồi từ file backup
+.\docker\db-restore.ps1 -BackupFile .\backups\ecogreen-20261119-080000.sql
+```
 
 ### Database Docker đã được khởi tạo trước đó
 
@@ -207,6 +217,7 @@ Các script trong `docker/postgres-init/` chỉ chạy tự động khi PostgreS
 | `/orders/:id` | Chi tiết đơn hàng / tiến trình / yêu cầu đổi trả | Đăng nhập, kiểm tra quyền sở hữu |
 | `/account/addresses` | Sổ địa chỉ | Đăng nhập |
 | `/account/profile` | Hồ sơ cá nhân | Đăng nhập |
+| `/account/notifications` | Thông báo của tôi | Đăng nhập |
 | `/faq` | Câu hỏi thường gặp | Công khai |
 | `/contact` | Liên hệ | Công khai |
 | `/policy/returns` | Chính sách đổi trả | Công khai |
@@ -228,7 +239,8 @@ Route quản trị là `/admin/*`. Đây là một giao diện gồm các tab ch
 | Khách hàng | `user:view` | Cập nhật vai trò `user:update`; khóa/mở khóa/xóa `user:disable`. Một số thao tác gán/gỡ ADMIN chỉ ADMIN được phép. |
 | Mã giảm giá | `discount:view` | Tạo/sửa/xóa `discount:manage`. |
 | Thông báo | `analytics:view` | Xem nhật ký thông báo theo API quản trị. |
-| API nhật ký kiểm toán (`/api/v1/admin/audit-logs`) | `audit:view` | Xem thao tác quản trị và thay đổi trạng thái đơn; hiện chưa có tab giao diện riêng. |
+| Sự kiện Analytics | `analytics:view` | Xem danh sách sự kiện analytics và lọc theo loại sự kiện. |
+| Nhật ký thao tác | `audit:view` | Xem thao tác quản trị và thay đổi trạng thái đơn (`GET /api/v1/admin/audit-logs`). |
 
 ### Vai trò
 
@@ -289,3 +301,5 @@ Việc ẩn tab/nút ở frontend chỉ phục vụ giao diện. Backend xác th
 ```
 
 **Tài liệu requirements:** [`docs/ai/EcoGreen_Project_Requirements.md`](docs/ai/EcoGreen_Project_Requirements.md) (bản Markdown); bản Word gốc vẫn được giữ tại [`docs/ai/EcoGreen_Project_Requirements.docx`](docs/ai/EcoGreen_Project_Requirements.docx).
+
+**Observability & CI/CD:** Spring Boot Actuator expose `/actuator/health` và `/actuator/info`; GitHub Actions CI chạy kiểm thử backend và lint/build frontend tại `.github/workflows/ci.yml`.

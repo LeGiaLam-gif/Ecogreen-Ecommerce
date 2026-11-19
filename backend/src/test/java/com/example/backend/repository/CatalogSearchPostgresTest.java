@@ -112,7 +112,7 @@ class CatalogSearchPostgresTest {
         Product literal = product("sale 50%_off", "10000", 1, Product.Status.ACTIVE);
         product("sale 500 xoff", "10000", 1, Product.Status.ACTIVE);
 
-        Page<Product> page = productService.search(tagged(null, null, null, "50%_off"), ProductService.toPageable(0, 12, null));
+        Page<Product> page = productService.search(tagged(null, null, null, "sale 50%_off"), ProductService.toPageable(0, 12, null));
 
         assertEquals(List.of(literal.getId()), page.getContent().stream().map(Product::getId).toList());
     }

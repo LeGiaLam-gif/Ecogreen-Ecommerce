@@ -1,6 +1,8 @@
 package com.example.backend.entity;
 
 import jakarta.persistence.*;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -22,6 +24,7 @@ public class Discount {
     @Column(nullable = false, length = 30)
     private String code;
 
+    @JdbcTypeCode(SqlTypes.SMALLINT)
     @Column(name = "percent_off", columnDefinition = "SMALLINT")
     private Integer percentOff;
 

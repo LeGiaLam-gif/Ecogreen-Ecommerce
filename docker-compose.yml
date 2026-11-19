@@ -70,7 +70,7 @@ services:
     volumes:
       - uploads_data:/app/uploads
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8081/api/v1/products >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8081/actuator/health >/dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12
